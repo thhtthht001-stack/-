@@ -1,1 +1,1 @@
-pip install vk_api
+vk_api
