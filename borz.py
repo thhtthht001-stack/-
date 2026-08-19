@@ -40,6 +40,7 @@ FORMS_FILE = "forms.json"
 
 # Новые файлы для экономики
 BALANCES_FILE = "balances.json"
+PROMOS_FILE = "promos.json"
 # =============================================
 
 vk_session = vk_api.VkApi(token=TOKEN, api_version=API_VERSION)
@@ -79,6 +80,7 @@ active_forms = {}
 
 # Экономика
 balances = {}              # {user_id: {"balance": int, "vip": bool, "vip_until": timestamp, "daily_last": timestamp, "duel_wins": int, "duel_losses": int, "casino_won": int, "casino_lost": int, "transferred_sent": int, "transferred_received": int, "total_won": int, "total_lost": int, "promo_used": bool}}
+promos = {}               # {code: {"amount": int, "used_by": [user_id, ...]}}
 active_duels = {}          # {chat_id: {message_id: {"challenger": user_id, "opponent": user_id, "amount": int}}}
 
 ROLE_LEVELS = {
@@ -95,7 +97,7 @@ def load_data():
     global muted_users, banned_users, user_roles, nicknames, warns, quiet_chats, server_chats
     global filter_words, welcome_texts, antiflood_settings, invite_settings, antitag_users
     global custom_roles, staff_texts, global_sync_chats, form_chats, active_forms, form_counters, global_bans
-    global balances
+    global balances, promos
 
     try:
         if os.path.exists(MUTES_FILE):
@@ -280,6 +282,23 @@ def load_data():
         print(f"Ошибка загрузки {BALANCES_FILE}: {e}")
         balances = {}
 
+    try:
+        if os.path.exists(PROMOS_FILE):
+            with open(PROMOS_FILE, 'r', encoding='utf-8') as f:
+                raw = json.load(f)
+                promos = {
+                    str(code).upper(): {
+                        "amount": int(data["amount"]),
+                        "used_by": [int(uid) for uid in data.get("used_by", [])]
+                    }
+                    for code, data in raw.items()
+                }
+        else:
+            promos = {}
+    except Exception as e:
+        print(f"Ошибка загрузки {PROMOS_FILE}: {e}")
+        promos = {}
+
 def load_info():
     global custom_info_text
     if os.path.exists(INFO_FILE):
@@ -393,6 +412,10 @@ def save_global_bans():
 def save_balances():
     with open(BALANCES_FILE, 'w', encoding='utf-8') as f:
         json.dump(balances, f, ensure_ascii=False, indent=2)
+
+def save_promos():
+    with open(PROMOS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(promos, f, ensure_ascii=False, indent=2)
 
 load_data()
 load_info()
@@ -544,7 +567,7 @@ def is_bot_admin(chat_id):
         print(f"Ошибка проверки прав бота в беседе {chat_id}: {e}")
     return False
 
-def send_message(chat_id, text, keyboard=None):
+def send_message(chat_id, text, keyboard=None, random_id=None):
     now = time.time()
     text_hash = hashlib.md5(text.encode()).hexdigest()
     cache_key = (chat_id, text_hash)
@@ -560,7 +583,7 @@ def send_message(chat_id, text, keyboard=None):
         vk.messages.send(
             peer_id=2000000000 + chat_id,
             message=text,
-            random_id=get_random_id(),
+            random_id=get_random_id() if random_id is None else random_id,
             keyboard=keyboard
         )
     except Exception as e:
@@ -1284,7 +1307,7 @@ def get_help_text_and_keyboard(chat_id, from_id):
              "/дуэль @user <сумма> — вызвать на дуэль",
              "/топ — топ самых богатых пользователей",
              "/buyvip — купить VIP статус (20 000$)",
-             "/промо — получить бонус (разово)"]
+             "/промо <код> — активировать промокод"]
     
     if role_level >= 1:
         lines += ["",
@@ -1383,6 +1406,12 @@ def get_help_text_and_keyboard(chat_id, from_id):
                   "/newrole — изменить название роли в беседе",
                   "/form — включение/выключение режима форм (on/off)",
                   "/formu — вывести готовую команду бана по номеру формы"]
+
+    if from_id == OWNER_ID:
+        lines += ["",
+                  "Команды владельца:",
+                  "/givecash @user <количество> — выдать монеты",
+                  "/createpromo <код> <количество> — создать промокод"]
 
     keyboard = None
     if role_level >= 1:
@@ -1609,6 +1638,12 @@ def handle_message(event):
 
     parts = text.split(maxsplit=4)
     command = parts[0].lower()
+
+    command_random_id = None
+    if cmid is not None:
+        command_random_id = int(hashlib.sha256(
+            f"{peer_id}:{cmid}:{text}".encode("utf-8")
+        ).hexdigest()[:8], 16) & 0x7fffffff or 1
 
     # Команда /formu – вывод готовой команды (без выполнения)
     if command == '/formu':
@@ -2937,13 +2972,13 @@ def handle_message(event):
 
         elif command == '/addspec':
             if from_id != OWNER_ID:
-                send_message(chat_id, "Только владелец бота может выдавать роль «Спец администратор».")
+                send_message(chat_id, "Только владелец бота может выдавать роль «Спец администратор».", random_id=command_random_id)
                 return
             if not target_id:
-                send_message(chat_id, "Укажите пользователя: /addspec @user или id")
+                send_message(chat_id, "Укажите пользователя: /addspec @user или id", random_id=command_random_id)
                 return
             set_user_role(chat_id, target_id, "Спец администратор")
-            send_message(chat_id, f"{get_user_link(target_id)} назначен(а) Спец администратором.")
+            send_message(chat_id, f"{get_user_link(target_id)} назначен(а) Спец администратором.", random_id=command_random_id)
             return
 
         elif command == '/server':
@@ -3307,6 +3342,56 @@ def handle_message(event):
             return
 
     # ========== ЭКОНОМИЧЕСКИЕ КОМАНДЫ (доступны всем) ==========
+    if command == '/givecash':
+        if from_id != OWNER_ID:
+            send_message(chat_id, "Команда доступна только владельцу бота.")
+            return
+        if len(parts) < 3:
+            send_message(chat_id, "Использование: /givecash @user <количество>")
+            return
+        target_id = extract_user_from_arg(parts[1])
+        if not target_id:
+            send_message(chat_id, "Не удалось определить пользователя.")
+            return
+        try:
+            amount = int(parts[2])
+        except ValueError:
+            send_message(chat_id, "Количество должно быть целым числом.")
+            return
+        if amount <= 0:
+            send_message(chat_id, "Количество должно быть положительным.")
+            return
+        add_money(target_id, amount)
+        send_message(chat_id, f"{get_user_link(target_id)} выдано {amount:,}$.")
+        return
+
+    if command == '/createpromo':
+        if from_id != OWNER_ID:
+            send_message(chat_id, "Команда доступна только владельцу бота.")
+            return
+        if len(parts) < 3:
+            send_message(chat_id, "Использование: /createpromo <промокод> <количество>")
+            return
+        code = parts[1].strip().upper()
+        if not re.fullmatch(r'[A-ZА-ЯЁ0-9_-]{1,32}', code):
+            send_message(chat_id, "Промокод должен содержать только буквы, цифры, _ или - и быть длиной до 32 символов.")
+            return
+        try:
+            amount = int(parts[2])
+        except ValueError:
+            send_message(chat_id, "Количество должно быть целым числом.")
+            return
+        if amount <= 0:
+            send_message(chat_id, "Количество должно быть положительным.")
+            return
+        if code in promos:
+            send_message(chat_id, "Такой промокод уже существует.")
+            return
+        promos[code] = {"amount": amount, "used_by": []}
+        save_promos()
+        send_message(chat_id, f"Промокод {code} создан на {amount:,}$.")
+        return
+
     if command in ('/balance', '/баланс'):
         target = from_id
         if msg.get('fwd_messages'):
@@ -3478,33 +3563,22 @@ def handle_message(event):
         return
 
     if command in ('/promo', '/промо'):
-        user_data = balances.get(from_id)
-        if not user_data:
-            user_data = {
-                "balance": 0,
-                "vip": False,
-                "vip_until": 0,
-                "daily_last": 0,
-                "duel_wins": 0,
-                "duel_losses": 0,
-                "casino_won": 0,
-                "casino_lost": 0,
-                "transferred_sent": 0,
-                "transferred_received": 0,
-                "total_won": 0,
-                "total_lost": 0,
-                "promo_used": False
-            }
-            balances[from_id] = user_data
-
-        if user_data.get("promo_used", False):
-            send_message(chat_id, "Вы уже использовали промокод.")
+        if len(parts) < 2:
+            send_message(chat_id, "Использование: /promo <промокод>")
             return
-        promo_bonus = random.randint(500, 1000)
-        user_data["balance"] += promo_bonus
-        user_data["promo_used"] = True
+        code = parts[1].strip().upper()
+        promo = promos.get(code)
+        if not promo:
+            send_message(chat_id, "Промокод не найден.")
+            return
+        if from_id in promo["used_by"]:
+            send_message(chat_id, "Вы уже использовали этот промокод.")
+            return
+        add_money(from_id, promo["amount"])
+        promo["used_by"].append(from_id)
+        save_promos()
         save_balances()
-        send_message(chat_id, f"🎉 Промокод активирован! Вы получили {promo_bonus:,}$!")
+        send_message(chat_id, f"Промокод активирован! Вы получили {promo['amount']:,}$!")
         return
 
     if command == '/buyvip':
