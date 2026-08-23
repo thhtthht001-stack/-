@@ -12,7 +12,7 @@ import random
 import sys
 
 # ================= НАСТРОЙКИ =================
-TOKEN = "vk1.a.qTmbvDqtUaMY-v3WUAFCttrgbdC0pGgKRM97ls8g-INfMxhV9RW4jl_bzqoa5-evzCRVrEaFx4vI9dC9QHDvygT5f2OHaa8rrx77gqorzwt6H3TZ3shuFieOFrGds09ksldW8nXefrrmMy_kr9SW8zOl6OjdjfOPRyeA_clm7tcZbZM6Uc_BCR-leDG55phFCEoHRQhNl34oYCqT66b6HQ"
+TOKEN = ""
 GROUP_ID = 240091890
 API_VERSION = "5.199"
 OWNER_ID = 1043667113
