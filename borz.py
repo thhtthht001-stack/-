@@ -29,6 +29,7 @@ INFO_FILE = "info_text.json"
 MSG_STATS_FILE = "msg_stats.json"
 LOG_CHAT_ID = 0
 GLOBAL_BANS_FILE = "global_bans.json"
+CHAT_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chat_logs.txt")
 
 FILTER_FILE = "filter.json"
 WELCOME_FILE = "welcome.json"
@@ -120,6 +121,42 @@ ROLE_LEVELS = {
     "Зам.Спец администратора": 5,
     "Спец администратор": 6
 }
+
+
+def log_chat_message(msg):
+    """Сохраняет каждое сообщение пользователя в локальный файл логов."""
+    try:
+        from_id = msg.get('from_id')
+        peer_id = msg.get('peer_id')
+        text = msg.get('text', '')
+        if from_id is None or peer_id is None:
+            return
+        if peer_id < 2000000000:
+            return
+
+        chat_id = peer_id - 2000000000
+        timestamp = datetime.datetime.now().strftime('%d.%m.%Y %H:%M:%S')
+        user_name = user_mention(from_id) if callable(user_mention) else f"id{from_id}"
+        message_text = text if text else '[без текста]'
+        attachments = msg.get('attachments')
+        if attachments:
+            attachment_types = []
+            for item in attachments:
+                if isinstance(item, dict):
+                    attachment_types.append(item.get('type', 'attachment'))
+            if attachment_types:
+                message_text = f"{message_text} | attachments={attachment_types}"
+
+        line = (
+            f"[{timestamp}] chat_id={chat_id} peer_id={peer_id} user_id={from_id} "
+            f"user={user_name} | {message_text}\n"
+        )
+
+        with open(CHAT_LOG_FILE, 'a', encoding='utf-8') as file:
+            file.write(line)
+    except Exception as exc:
+        print(f"Ошибка записи лога чата: {exc}")
+
 
 # ---------- Загрузка/сохранение ----------
 def load_data():
@@ -1398,6 +1435,8 @@ def handle_message(event):
         msg_stats[chat_id][from_id]["count"] += 1
         msg_stats[chat_id][from_id]["last_time"] = time.time()
         save_msg_stats()
+
+        log_chat_message(msg)
 
         if LOG_CHAT_ID and LOG_CHAT_ID != 0:
             chat_name = get_chat_name(chat_id)
