@@ -30,6 +30,7 @@ MSG_STATS_FILE = "msg_stats.json"
 LOG_CHAT_ID = 0
 GLOBAL_BANS_FILE = "global_bans.json"
 CHAT_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chat_logs.txt")
+LOGS_ACCESS_FILE = "logs_access.json"
 
 FILTER_FILE = "filter.json"
 WELCOME_FILE = "welcome.json"
@@ -61,6 +62,7 @@ chat_names = {}
 msg_stats = {}
 BOT_ID = None
 global_bans = set()
+logs_access = set()
 
 processed_messages = {}
 PROCESSED_TTL = 2
@@ -162,7 +164,7 @@ def log_chat_message(msg):
 def load_data():
     global muted_users, banned_users, user_roles, nicknames, warns, quiet_chats, server_chats
     global filter_words, welcome_texts, antiflood_settings, invite_settings, antitag_users
-    global custom_roles, staff_texts, global_sync_chats, form_chats, active_forms, form_counters, global_bans
+    global custom_roles, staff_texts, global_sync_chats, form_chats, active_forms, form_counters, global_bans, logs_access
 
     try:
         if os.path.exists(MUTES_FILE):
@@ -335,6 +337,16 @@ def load_data():
         print(f"Ошибка загрузки {GLOBAL_BANS_FILE}: {e}")
         global_bans = set()
 
+    try:
+        if os.path.exists(LOGS_ACCESS_FILE):
+            with open(LOGS_ACCESS_FILE, 'r', encoding='utf-8') as f:
+                logs_access = {int(uid) for uid in json.load(f)}
+        else:
+            logs_access = set()
+    except Exception as e:
+        print(f"Ошибка загрузки {LOGS_ACCESS_FILE}: {e}")
+        logs_access = set()
+
 
 def load_info():
     global custom_info_text
@@ -372,6 +384,10 @@ def save_bans():
 def save_roles():
     with open(ROLES_FILE, 'w', encoding='utf-8') as f:
         json.dump(user_roles, f, ensure_ascii=False, indent=2)
+
+def save_logs_access():
+    with open(LOGS_ACCESS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(sorted(logs_access), f, ensure_ascii=False, indent=2)
 
 def save_nicks():
     with open(NICKS_FILE, 'w', encoding='utf-8') as f:
@@ -720,6 +736,83 @@ def get_nlist_message(chat_id, page):
     keyboard = get_nlist_keyboard(page, total_pages)
     return text, keyboard
 
+def get_chatlog_keyboard(page, total_pages, chat_id=None):
+    def payload(target_page):
+        data = {"cmd": "chatlog", "page": target_page}
+        if chat_id is not None:
+            data["chat_id"] = chat_id
+        return json.dumps(data)
+
+    row = [{
+        "action": {
+            "type": "callback",
+            "payload": payload(max(1, page - 1)),
+            "label": "◀"
+        },
+        "color": "secondary"
+    }]
+    if page < total_pages:
+        row.append({
+            "action": {
+                "type": "callback",
+                "payload": payload(page + 1),
+                "label": "▶"
+            },
+            "color": "secondary"
+        })
+    return json.dumps({"inline": True, "buttons": [row]})
+
+def get_chatlog_message(page, chat_id=None):
+    if not os.path.exists(CHAT_LOG_FILE):
+        return "Лог сообщений пуст.", None
+
+    try:
+        with open(CHAT_LOG_FILE, 'r', encoding='utf-8') as file:
+            lines = [line.rstrip('\n') for line in file if line.strip()]
+    except OSError:
+        return "Не удалось прочитать лог сообщений.", None
+
+    if chat_id is not None:
+        marker = f"chat_id={chat_id} "
+        lines = [line for line in lines if marker in line]
+    if not lines:
+        return "Сообщения в логе не найдены.", None
+
+    pages = []
+    current_page = []
+    current_length = 0
+    for line in reversed(lines):
+        if current_page and (len(current_page) >= 10 or current_length + len(line) + 1 > 3800):
+            pages.append(list(reversed(current_page)))
+            current_page = []
+            current_length = 0
+        current_page.append(line)
+        current_length += len(line) + 1
+    if current_page:
+        pages.append(list(reversed(current_page)))
+
+    total_pages = len(pages)
+    page = max(1, min(page, total_pages))
+    title = "Лог сообщений"
+    if chat_id is not None:
+        title += f" беседы {chat_id}"
+    text = f"{title} [{page}/{total_pages}]:\n\n" + "\n".join(pages[page - 1])
+    return text, get_chatlog_keyboard(page, total_pages, chat_id)
+
+def get_logged_chat_ids():
+    if not os.path.exists(CHAT_LOG_FILE):
+        return []
+    chat_ids = set()
+    try:
+        with open(CHAT_LOG_FILE, 'r', encoding='utf-8') as file:
+            for line in file:
+                match = re.search(r'\bchat_id=(-?\d+)\b', line)
+                if match:
+                    chat_ids.add(int(match.group(1)))
+    except OSError:
+        return []
+    return sorted(chat_ids)
+
 def get_nonick_keyboard(page, total_pages):
     buttons = []
     row = []
@@ -894,6 +987,9 @@ def get_role_level(role):
 
 def is_owner(user_id):
     return user_id in OWNER_IDS
+
+def can_view_logs(user_id):
+    return is_owner(user_id) or user_id in logs_access
 
 def has_moderation_rights(chat_id, user_id):
     if is_owner(user_id):
@@ -1345,7 +1441,10 @@ def get_help_text_and_keyboard(chat_id, from_id):
     if is_owner(from_id):
         lines += ["",
                   "Команды владельца:",
+                  "/addlogs @user — выдать доступ к логам",
                   "/restart — перезапустить бота через 30 секунд",
+                  "/chatid — список бесед с логами",
+                  "/chatlog [chat_id] — просмотр лога сообщений",
                   "/globalspec @user — выдать спецадминистратора во всех чатах"]
 
     keyboard = None
@@ -1382,6 +1481,38 @@ def handle_message(event):
         return
 
     if peer_id < 2000000000:
+        if not text or text.split()[0].lower() not in ('/chatlog', '/chatid'):
+            return
+        if not can_view_logs(from_id):
+            vk.messages.send(
+                peer_id=peer_id,
+                message="У вас нет доступа к логам.",
+                random_id=get_random_id()
+            )
+            return
+        parts = text.split()
+        if parts[0].lower() == '/chatid':
+            chat_ids = get_logged_chat_ids()
+            message = "Беседы с логами:\n" + "\n".join(str(chat_id) for chat_id in chat_ids) if chat_ids else "Логи бесед не найдены."
+            vk.messages.send(peer_id=peer_id, message=message, random_id=get_random_id())
+            return
+        chat_filter = None
+        if len(parts) > 1:
+            if not parts[1].isdigit():
+                vk.messages.send(
+                    peer_id=peer_id,
+                    message="Использование: /chatlog [chat_id]",
+                    random_id=get_random_id()
+                )
+                return
+            chat_filter = int(parts[1])
+        text2, keyboard = get_chatlog_message(1, chat_filter)
+        vk.messages.send(
+            peer_id=peer_id,
+            message=text2,
+            random_id=get_random_id(),
+            keyboard=keyboard
+        )
         return
 
     # Проверка мута
@@ -1766,6 +1897,30 @@ def handle_message(event):
         if extracted:
             target_id = extracted
             args_start = 2
+
+    if command == '/addlogs':
+        if not is_owner(from_id):
+            send_message(chat_id, "Команда доступна только владельцу бота.")
+            return
+        if not target_id:
+            send_message(chat_id, "Укажите пользователя: /addlogs @user")
+            return
+        if target_id in logs_access:
+            send_message(chat_id, "У пользователя уже есть доступ к логам.")
+            return
+        logs_access.add(target_id)
+        save_logs_access()
+        send_message(chat_id, f"{get_user_link(target_id)} получил(а) доступ к логам.")
+        return
+
+    if command == '/chatid':
+        if not can_view_logs(from_id):
+            send_message(chat_id, "У вас нет доступа к логам.")
+            return
+        chat_ids = get_logged_chat_ids()
+        message = "Беседы с логами:\n" + "\n".join(str(log_chat_id) for log_chat_id in chat_ids) if chat_ids else "Логи бесед не найдены."
+        send_message(chat_id, message)
+        return
 
     if command == '/globalspec':
         if from_id != OWNER_ID:
@@ -3847,7 +4002,29 @@ def process_callback(event):
     if cmd in ('duel_accept', 'duel_reject'):
         return
 
-    if cmd == 'nlist':
+    if cmd == 'chatlog':
+        if not can_view_logs(user_id):
+            return
+        page = payload.get('page', 1)
+        chat_filter = payload.get('chat_id')
+        try:
+            page = int(page)
+            if chat_filter is not None:
+                chat_filter = int(chat_filter)
+        except (TypeError, ValueError):
+            return
+        text, keyboard = get_chatlog_message(page, chat_filter)
+        try:
+            vk.messages.edit(
+                peer_id=peer_id,
+                conversation_message_id=conversation_message_id,
+                message=text,
+                keyboard=keyboard
+            )
+        except Exception as e:
+            print(f"Ошибка редактирования chatlog: {e}")
+
+    elif cmd == 'nlist':
         page = payload.get('page', 1)
         if not has_moderation_rights(chat_id, user_id):
             return
