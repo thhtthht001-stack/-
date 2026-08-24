@@ -29,7 +29,12 @@ INFO_FILE = "info_text.json"
 MSG_STATS_FILE = "msg_stats.json"
 LOG_CHAT_ID = 0
 GLOBAL_BANS_FILE = "global_bans.json"
-CHAT_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chat_logs.txt")
+DATA_DIR = os.environ.get(
+    "BOT_DATA_DIR",
+    os.path.dirname(os.path.abspath(__file__)),
+)
+os.makedirs(DATA_DIR, exist_ok=True)
+CHAT_LOG_FILE = os.path.join(DATA_DIR, "chat_logs.txt")
 LOGS_ACCESS_FILE = "logs_access.json"
 
 FILTER_FILE = "filter.json"
@@ -42,6 +47,9 @@ STAFF_TEXT_FILE = "staff_text.json"
 GLOBAL_SYNC_FILE = "global_sync.json"
 FORM_CHATS_FILE = "form_chats.json"
 FORMS_FILE = "forms.json"
+BALANCES_FILE = "balances.json"
+PROMOS_FILE = "promos.json"
+GAME_DISABLED_FILE = "game_disabled.json"
 
 # =============================================
 
@@ -86,31 +94,41 @@ balances = {}
 promos = {}
 active_duels = {}
 game_disabled_chats = set()
-REMOVED_COMMANDS = {
-    '/givecash', '/createpromo',
-    '/balance', '/баланс', '/casino', '/казино',
-    '/prize', '/приз', '/promo', '/промо', '/buyvip',
-    '/transfer', '/передать', '/top', '/топ', '/duel', '/дуэль',
-    '/offgame', '/ongame',
-}
-
 def save_balances():
-    return
+    with open(BALANCES_FILE, 'w', encoding='utf-8') as f:
+        json.dump({str(uid): data for uid, data in balances.items()}, f, ensure_ascii=False, indent=2)
 
 def save_promos():
-    return
+    with open(PROMOS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(promos, f, ensure_ascii=False, indent=2)
 
 def add_money(user_id, amount, stat_key=None):
-    return
+    if user_id not in balances:
+        balances[user_id] = {
+            "balance": 0, "vip": False, "vip_until": 0,
+            "daily_last": 0, "duel_wins": 0, "duel_losses": 0,
+            "casino_won": 0, "casino_lost": 0,
+            "transferred_sent": 0, "transferred_received": 0,
+            "total_won": 0, "total_lost": 0, "promo_used": False
+        }
+    balances[user_id]["balance"] += amount
+    if stat_key:
+        balances[user_id][stat_key] = balances[user_id].get(stat_key, 0) + amount
+    save_balances()
 
 def is_vip(user_id):
-    return False
+    data = balances.get(user_id, {})
+    return bool(data.get("vip") and data.get("vip_until", 0) > time.time())
 
 def get_vip_remaining(user_id):
-    return 0
+    return max(0, int(balances.get(user_id, {}).get("vip_until", 0) - time.time()))
 
 def format_time_left(seconds):
-    return "0д 0ч 0м"
+    seconds = max(0, int(seconds))
+    days, seconds = divmod(seconds, 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes = seconds // 60
+    return f"{days}д {hours}ч {minutes}м"
 
 def get_duel_keyboard(challenger_id, opponent_id, amount, chat_id):
     return None
@@ -165,6 +183,7 @@ def load_data():
     global muted_users, banned_users, user_roles, nicknames, warns, quiet_chats, server_chats
     global filter_words, welcome_texts, antiflood_settings, invite_settings, antitag_users
     global custom_roles, staff_texts, global_sync_chats, form_chats, active_forms, form_counters, global_bans, logs_access
+    global balances, promos, game_disabled_chats
 
     try:
         if os.path.exists(MUTES_FILE):
@@ -347,6 +366,37 @@ def load_data():
         print(f"Ошибка загрузки {LOGS_ACCESS_FILE}: {e}")
         logs_access = set()
 
+    try:
+        if os.path.exists(BALANCES_FILE):
+            with open(BALANCES_FILE, 'r', encoding='utf-8') as f:
+                raw = json.load(f)
+                balances = {int(uid): data for uid, data in raw.items()}
+        else:
+            balances = {}
+    except Exception as e:
+        print(f"Ошибка загрузки {BALANCES_FILE}: {e}")
+        balances = {}
+
+    try:
+        if os.path.exists(PROMOS_FILE):
+            with open(PROMOS_FILE, 'r', encoding='utf-8') as f:
+                promos = json.load(f)
+        else:
+            promos = {}
+    except Exception as e:
+        print(f"Ошибка загрузки {PROMOS_FILE}: {e}")
+        promos = {}
+
+    try:
+        if os.path.exists(GAME_DISABLED_FILE):
+            with open(GAME_DISABLED_FILE, 'r', encoding='utf-8') as f:
+                game_disabled_chats = set(json.load(f))
+        else:
+            game_disabled_chats = set()
+    except Exception as e:
+        print(f"Ошибка загрузки {GAME_DISABLED_FILE}: {e}")
+        game_disabled_chats = set()
+
 
 def load_info():
     global custom_info_text
@@ -388,6 +438,10 @@ def save_roles():
 def save_logs_access():
     with open(LOGS_ACCESS_FILE, 'w', encoding='utf-8') as f:
         json.dump(sorted(logs_access), f, ensure_ascii=False, indent=2)
+
+def save_game_disabled():
+    with open(GAME_DISABLED_FILE, 'w', encoding='utf-8') as f:
+        json.dump(sorted(game_disabled_chats), f, ensure_ascii=False, indent=2)
 
 def save_nicks():
     with open(NICKS_FILE, 'w', encoding='utf-8') as f:
@@ -812,6 +866,53 @@ def get_logged_chat_ids():
     except OSError:
         return []
     return sorted(chat_ids)
+
+def send_chatlog_file(peer_id, chat_id=None):
+    if not os.path.exists(CHAT_LOG_FILE):
+        return False, "Лог сообщений пуст."
+
+    try:
+        with open(CHAT_LOG_FILE, 'r', encoding='utf-8') as file:
+            lines = [line for line in file if line.strip()]
+    except OSError:
+        return False, "Не удалось прочитать лог сообщений."
+
+    if chat_id is not None:
+        marker = f"chat_id={chat_id} "
+        lines = [line for line in lines if marker in line]
+    if not lines:
+        return False, "Сообщения в логе не найдены."
+
+    suffix = str(chat_id) if chat_id is not None else "all"
+    file_name = f"chatlog_{suffix}.txt"
+    temporary_path = os.path.join(os.path.dirname(CHAT_LOG_FILE), f".{file_name}.tmp")
+    try:
+        with open(temporary_path, 'w', encoding='utf-8') as file:
+            file.writelines(lines)
+
+        upload = vk_api.VkUpload(vk_session)
+        document = upload.document_message(
+            temporary_path,
+            title=file_name,
+            peer_id=peer_id
+        )
+        document_data = document.get('doc', document)
+        attachment = f"doc{document_data['owner_id']}_{document_data['id']}"
+        vk.messages.send(
+            peer_id=peer_id,
+            attachment=attachment,
+            message=f"Файл логов беседы {chat_id}:" if chat_id is not None else "Полный файл логов:",
+            random_id=get_random_id()
+        )
+        return True, None
+    except Exception as exc:
+        print(f"Ошибка отправки файла логов: {exc}")
+        return False, "Не удалось загрузить файл логов."
+    finally:
+        try:
+            os.remove(temporary_path)
+        except OSError:
+            pass
 
 def get_nonick_keyboard(page, total_pages):
     buttons = []
@@ -1506,13 +1607,13 @@ def handle_message(event):
                 )
                 return
             chat_filter = int(parts[1])
-        text2, keyboard = get_chatlog_message(1, chat_filter)
-        vk.messages.send(
-            peer_id=peer_id,
-            message=text2,
-            random_id=get_random_id(),
-            keyboard=keyboard
-        )
+        sent, error_message = send_chatlog_file(peer_id, chat_filter)
+        if not sent:
+            vk.messages.send(
+                peer_id=peer_id,
+                message=error_message,
+                random_id=get_random_id()
+            )
         return
 
     # Проверка мута
@@ -1712,9 +1813,6 @@ def handle_message(event):
         command_random_id = int(hashlib.sha256(
             f"{peer_id}:{cmid}:{text}".encode("utf-8")
         ).hexdigest()[:8], 16) & 0x7fffffff or 1
-
-    if command in REMOVED_COMMANDS:
-        return
 
     if command == '/restart':
         global restart_scheduled
@@ -3529,6 +3627,20 @@ def handle_message(event):
         promos[code] = {"amount": amount, "used_by": []}
         save_promos()
         send_message(chat_id, f"Промокод {code} создан на {amount:,}$.")
+        return
+
+    if command in ('/offgame', '/ongame'):
+        if not has_admin_rights(chat_id, from_id):
+            send_message(chat_id, "Недостаточно прав.")
+            return
+        if command == '/offgame':
+            game_disabled_chats.add(chat_id)
+            save_game_disabled()
+            send_message(chat_id, "Игровая система в этой беседе выключена.")
+        else:
+            game_disabled_chats.discard(chat_id)
+            save_game_disabled()
+            send_message(chat_id, "Игровая система в этой беседе включена.")
         return
 
     if chat_id in game_disabled_chats and command in (
