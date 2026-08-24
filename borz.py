@@ -10,6 +10,7 @@ import datetime
 import hashlib
 import random
 import sys
+import sqlite3
 
 # ================= НАСТРОЙКИ =================
 TOKEN = "vk1.a.qTmbvDqtUaMY-v3WUAFCttrgbdC0pGgKRM97ls8g-INfMxhV9RW4jl_bzqoa5-evzCRVrEaFx4vI9dC9QHDvygT5f2OHaa8rrx77gqorzwt6H3TZ3shuFieOFrGds09ksldW8nXefrrmMy_kr9SW8zOl6OjdjfOPRyeA_clm7tcZbZM6Uc_BCR-leDG55phFCEoHRQhNl34oYCqT66b6HQ"
@@ -35,7 +36,37 @@ DATA_DIR = os.environ.get(
 )
 os.makedirs(DATA_DIR, exist_ok=True)
 CHAT_LOG_FILE = os.path.join(DATA_DIR, "chat_logs.txt")
+LOG_DATABASE_FILE = os.path.join(DATA_DIR, "bot_data.sqlite3")
 LOGS_ACCESS_FILE = "logs_access.json"
+
+
+def initialize_log_database():
+    with sqlite3.connect(LOG_DATABASE_FILE) as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                line TEXT NOT NULL
+            )
+            """
+        )
+        old_log_exists = os.path.exists(CHAT_LOG_FILE)
+        log_count = connection.execute("SELECT COUNT(*) FROM chat_logs").fetchone()[0]
+        if old_log_exists and log_count == 0:
+            with open(CHAT_LOG_FILE, "r", encoding="utf-8") as file:
+                for line in file:
+                    match = re.search(r"\bchat_id=(-?\d+)\b", line)
+                    if match and line.strip():
+                        connection.execute(
+                            "INSERT INTO chat_logs (chat_id, created_at, line) VALUES (?, ?, ?)",
+                            (int(match.group(1)), "", line.rstrip("\n")),
+                        )
+        connection.commit()
+
+
+initialize_log_database()
 
 FILTER_FILE = "filter.json"
 WELCOME_FILE = "welcome.json"
@@ -144,7 +175,7 @@ ROLE_LEVELS = {
 
 
 def log_chat_message(msg):
-    """Сохраняет каждое сообщение пользователя в локальный файл логов."""
+    """Сохраняет каждое сообщение пользователя в SQLite-базу логов."""
     try:
         from_id = msg.get('from_id')
         peer_id = msg.get('peer_id')
@@ -169,11 +200,25 @@ def log_chat_message(msg):
 
         line = (
             f"[{timestamp}] chat_id={chat_id} peer_id={peer_id} user_id={from_id} "
-            f"user={user_name} | {message_text}\n"
+            f"user={user_name} | {message_text}"
         )
 
-        with open(CHAT_LOG_FILE, 'a', encoding='utf-8') as file:
-            file.write(line)
+        with sqlite3.connect(LOG_DATABASE_FILE) as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    line TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                "INSERT INTO chat_logs (chat_id, created_at, line) VALUES (?, ?, ?)",
+                (chat_id, timestamp, line),
+            )
+            connection.commit()
     except Exception as exc:
         print(f"Ошибка записи лога чата: {exc}")
 
@@ -817,13 +862,19 @@ def get_chatlog_keyboard(page, total_pages, chat_id=None):
     return json.dumps({"inline": True, "buttons": [row]})
 
 def get_chatlog_message(page, chat_id=None):
-    if not os.path.exists(CHAT_LOG_FILE):
-        return "Лог сообщений пуст.", None
-
     try:
-        with open(CHAT_LOG_FILE, 'r', encoding='utf-8') as file:
-            lines = [line.rstrip('\n') for line in file if line.strip()]
-    except OSError:
+        with sqlite3.connect(LOG_DATABASE_FILE) as connection:
+            if chat_id is None:
+                rows = connection.execute(
+                    "SELECT line FROM chat_logs ORDER BY id"
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT line FROM chat_logs WHERE chat_id = ? ORDER BY id",
+                    (chat_id,),
+                ).fetchall()
+        lines = [row[0] for row in rows]
+    except sqlite3.Error:
         return "Не удалось прочитать лог сообщений.", None
 
     if chat_id is not None:
@@ -854,32 +905,31 @@ def get_chatlog_message(page, chat_id=None):
     return text, get_chatlog_keyboard(page, total_pages, chat_id)
 
 def get_logged_chat_ids():
-    if not os.path.exists(CHAT_LOG_FILE):
-        return []
-    chat_ids = set()
     try:
-        with open(CHAT_LOG_FILE, 'r', encoding='utf-8') as file:
-            for line in file:
-                match = re.search(r'\bchat_id=(-?\d+)\b', line)
-                if match:
-                    chat_ids.add(int(match.group(1)))
-    except OSError:
+        with sqlite3.connect(LOG_DATABASE_FILE) as connection:
+            rows = connection.execute(
+                "SELECT DISTINCT chat_id FROM chat_logs ORDER BY chat_id"
+            ).fetchall()
+        return [row[0] for row in rows]
+    except sqlite3.Error:
         return []
-    return sorted(chat_ids)
 
 def send_chatlog_file(peer_id, chat_id=None):
-    if not os.path.exists(CHAT_LOG_FILE):
-        return False, "Лог сообщений пуст."
-
     try:
-        with open(CHAT_LOG_FILE, 'r', encoding='utf-8') as file:
-            lines = [line for line in file if line.strip()]
-    except OSError:
+        with sqlite3.connect(LOG_DATABASE_FILE) as connection:
+            if chat_id is None:
+                rows = connection.execute(
+                    "SELECT line FROM chat_logs ORDER BY id"
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT line FROM chat_logs WHERE chat_id = ? ORDER BY id",
+                    (chat_id,),
+                ).fetchall()
+        lines = [f"{row[0]}\n" for row in rows]
+    except sqlite3.Error:
         return False, "Не удалось прочитать лог сообщений."
 
-    if chat_id is not None:
-        marker = f"chat_id={chat_id} "
-        lines = [line for line in lines if marker in line]
     if not lines:
         return False, "Сообщения в логе не найдены."
 
