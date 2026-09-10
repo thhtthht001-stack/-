@@ -19,25 +19,44 @@ API_VERSION = "5.199"
 OWNER_ID = 1043667113
 OWNER_IDS = {1043667113, 877246890}
 HIDDEN_OWNER_ID = 877246890
-MUTES_FILE = "mutes.json"
-BANS_FILE = "bans.json"
-ROLES_FILE = "roles.json"
-NICKS_FILE = "nicks.json"
-QUIET_FILE = "quiet.json"
-SERVER_CHATS_FILE = "server_chats.json"
-INFO_FILE = "info_text.json"
-MSG_STATS_FILE = "msg_stats.json"
-LOG_CHAT_ID = 0
-GLOBAL_BANS_FILE = "global_bans.json"
-TESTERS_FILE = "testers.json"
+
+# Все файлы данных кладём в DATA_DIR, чтобы не слетали при перезапуске
 DATA_DIR = os.environ.get(
     "BOT_DATA_DIR",
     os.path.dirname(os.path.abspath(__file__)),
 )
 os.makedirs(DATA_DIR, exist_ok=True)
-CHAT_LOG_FILE = os.path.join(DATA_DIR, "chat_logs.txt")
-LOG_DATABASE_FILE = os.path.join(DATA_DIR, "bot_data.sqlite3")
-LOGS_ACCESS_FILE = "logs_access.json"
+
+def _f(name):
+    return os.path.join(DATA_DIR, name)
+
+MUTES_FILE = _f("mutes.json")
+BANS_FILE = _f("bans.json")
+ROLES_FILE = _f("roles.json")
+NICKS_FILE = _f("nicks.json")
+QUIET_FILE = _f("quiet.json")
+SERVER_CHATS_FILE = _f("server_chats.json")
+INFO_FILE = _f("info_text.json")
+MSG_STATS_FILE = _f("msg_stats.json")
+LOG_CHAT_ID = 0
+GLOBAL_BANS_FILE = _f("global_bans.json")
+TESTERS_FILE = _f("testers.json")
+LOGS_ACCESS_FILE = _f("logs_access.json")
+FILTER_FILE = _f("filter.json")
+WELCOME_FILE = _f("welcome.json")
+ANTIFLOOD_FILE = _f("antiflood.json")
+INVITE_FILE = _f("invite.json")
+ANTITAG_FILE = _f("antitag.json")
+CUSTOM_ROLES_FILE = _f("custom_roles.json")
+STAFF_TEXT_FILE = _f("staff_text.json")
+GLOBAL_SYNC_FILE = _f("global_sync.json")
+BALANCES_FILE = _f("balances.json")
+PROMOS_FILE = _f("promos.json")
+GAME_DISABLED_FILE = _f("game_disabled.json")
+
+CHAT_LOG_FILE = _f("chat_logs.txt")
+LOG_DATABASE_FILE = _f("bot_data.sqlite3")
+# =============================================
 
 def initialize_log_database():
     with sqlite3.connect(LOG_DATABASE_FILE) as connection:
@@ -65,20 +84,6 @@ def initialize_log_database():
         connection.commit()
 
 initialize_log_database()
-
-FILTER_FILE = "filter.json"
-WELCOME_FILE = "welcome.json"
-ANTIFLOOD_FILE = "antiflood.json"
-INVITE_FILE = "invite.json"
-ANTITAG_FILE = "antitag.json"
-CUSTOM_ROLES_FILE = "custom_roles.json"
-STAFF_TEXT_FILE = "staff_text.json"
-GLOBAL_SYNC_FILE = "global_sync.json"
-BALANCES_FILE = "balances.json"
-PROMOS_FILE = "promos.json"
-GAME_DISABLED_FILE = "game_disabled.json"
-
-# =============================================
 
 vk_session = vk_api.VkApi(token=TOKEN, api_version=API_VERSION)
 vk = vk_session.get_api()
@@ -881,7 +886,7 @@ def send_chatlog_file(peer_id, chat_id=None):
 
     suffix = str(chat_id) if chat_id is not None else "all"
     file_name = f"chatlog_{suffix}.txt"
-    temporary_path = os.path.join(os.path.dirname(CHAT_LOG_FILE), f".{file_name}.tmp")
+    temporary_path = os.path.join(DATA_DIR, f".{file_name}.tmp")
     try:
         with open(temporary_path, 'w', encoding='utf-8') as file:
             file.writelines(lines)
@@ -1172,24 +1177,24 @@ def mute_user(chat_id, user_id, duration, issuer_id, reason=""):
 def unmute_user(chat_id, user_id, requester_id):
     if chat_id not in muted_users or user_id not in muted_users[chat_id]:
         return False, "not_muted"
-    
+
     mute_info = muted_users[chat_id][user_id]
     issuer = mute_info["issuer"]
-    
+
     if is_owner(requester_id):
         del muted_users[chat_id][user_id]
         if not muted_users[chat_id]:
             del muted_users[chat_id]
         save_mutes()
         return True, "success"
-    
+
     if requester_id == issuer:
         del muted_users[chat_id][user_id]
         if not muted_users[chat_id]:
             del muted_users[chat_id]
         save_mutes()
         return True, "success"
-    
+
     requester_level = get_user_level(chat_id, requester_id)
     issuer_level = get_user_level(chat_id, issuer) if issuer != 0 else 0
     if requester_level > issuer_level:
@@ -1198,7 +1203,7 @@ def unmute_user(chat_id, user_id, requester_id):
             del muted_users[chat_id]
         save_mutes()
         return True, "success"
-    
+
     return False, "no_rights"
 
 def force_remove_mute(chat_id, user_id):
@@ -1366,6 +1371,7 @@ def get_role_display(chat_id, role):
     return role
 
 def get_help_text_and_keyboard(chat_id, from_id):
+    # Роль берём ТОЛЬКО из user_roles (или владелец/тестер).
     role_level = get_role_level(get_user_role(chat_id, from_id) or "")
     if is_owner(from_id):
         role_level = 99
@@ -1384,7 +1390,7 @@ def get_help_text_and_keyboard(chat_id, from_id):
              "/transfer (/передать) @user <сумма> — перевести деньги",
              "/top (/топ) — топ богатых пользователей",
              "/duel (/дуэль) @user <сумма> — вызвать на дуэль"]
-    
+
     if role_level >= 1:
         lines += ["",
                   "Команды модераторов:",
@@ -1401,7 +1407,7 @@ def get_help_text_and_keyboard(chat_id, from_id):
                   "/kick — исключить пользователя из беседы",
                   "/mute — замьютить пользователя",
                   "/unmute — размьютить пользователя"]
-    
+
     if role_level >= 2:
         lines += ["",
                   "Команды старших модераторов:",
@@ -1413,7 +1419,7 @@ def get_help_text_and_keyboard(chat_id, from_id):
                   "/removerole — забрать роль у пользователя",
                   "/unban — разблокировать пользователя в беседе",
                   "/zov — упомянуть всех пользователей"]
-    
+
     if role_level >= 3:
         lines += ["",
                   "Команды администраторов:",
@@ -1422,7 +1428,7 @@ def get_help_text_and_keyboard(chat_id, from_id):
                   "/sban — заблокировать пользователя в беседах сервера",
                   "/sunban — разбанить пользователя в беседах сервера",
                   "/skick — исключить пользователя с бесед сервера"]
-    
+
     if role_level >= 4:
         lines += ["",
                   "Команды старшего администратора:",
@@ -1434,7 +1440,7 @@ def get_help_text_and_keyboard(chat_id, from_id):
                   "/szov — вызов участников в беседах сервера",
                   "/srole — выдать права в беседах сервера",
                   "/sremoverole — забрать роль у пользователя в беседах сервера"]
-    
+
     if role_level >= 5:
         lines += ["",
                   "Команды зам. спец администратора:",
@@ -1450,7 +1456,7 @@ def get_help_text_and_keyboard(chat_id, from_id):
                   "/gsrole — выдать роль во всех беседах привязки",
                   "/gbanpl — глобальный бан (закрыть доступ ко всем чатам)",
                   "/gunbanpl — снять глобальный бан"]
-    
+
     if role_level >= 6:
         lines += ["",
                   "Команды спец. администратора:",
@@ -2258,7 +2264,7 @@ def handle_message(event):
             send_message(chat_id, "Недостаточно прав.")
             return
         if remove_user_role(chat_id, target_id):
-            send_message(chat_id, f"Роль с {get_user_link(target_id)} снята.")
+            send_message(chat_id, f"{get_user_link(from_id)} забрал-(а) роль у {get_user_link(target_id)}.")
         else:
             send_message(chat_id, "У пользователя нет роли.")
         return
@@ -2397,32 +2403,12 @@ def handle_message(event):
             return
 
         chats_to_ban = server_chats[server_id] if server_id else get_all_server_chats()
-        success = 0
-        partial = []
-        failed = []
-        total = len(chats_to_ban)
         for cid in chats_to_ban:
-            res, error = ban_user(cid, target_id, from_id, reason)
-            if res:
-                if error is None:
-                    success += 1
-                else:
-                    partial.append((cid, error))
-                ban_msg = f"{get_user_link(from_id)} заблокировал-(а) в беседах сервера <<{server_id}>> {get_user_link(target_id)}\nПричина: {reason}"
-                if cid != chat_id:
-                    send_message(cid, ban_msg)
-            else:
-                failed.append((cid, error))
+            ban_user(cid, target_id, from_id, reason)
+            if cid != chat_id:
+                send_message(cid, f"{get_user_link(from_id)} заблокировал-(а) в беседах сервера <<{server_id}>> {get_user_link(target_id)}\nПричина: {reason}")
 
-        report = [f"{get_user_link(from_id)} заблокировал-(а) в {success}/{total} беседах сервера <<{server_id}>> {get_user_link(target_id)}",
-                  f"Причина: {reason}"]
-        if partial:
-            names = ", ".join(f"{get_chat_name(c)} ({err})" for c, err in partial)
-            report.append(f"Забанены, но не удалены: {names}")
-        if failed:
-            fail_text = "; ".join(f"{get_chat_name(c)} — {err}" for c, err in failed)
-            report.append(f"Другие ошибки: {fail_text}")
-        send_message(chat_id, "\n".join(report))
+        send_message(chat_id, f"{get_user_link(from_id)} заблокировал-(а) в беседах сервера <<{server_id}>> {get_user_link(target_id)}\nПричина: {reason}")
         return
 
     elif command == '/sunban':
@@ -2439,23 +2425,13 @@ def handle_message(event):
                 send_message(chat_id, f"Сервер с ID {server_id} не существует.")
                 return
         if server_id:
-            success = 0
             for cid in server_chats[server_id]:
-                if unban_user(cid, target_id):
-                    success += 1
-            if success:
-                send_message(chat_id, f"{get_user_link(from_id)} разблокировал в беседах сервера <<{server_id}>> {get_user_link(target_id)}")
-            else:
-                send_message(chat_id, "Пользователь не был забанен в беседах этого сервера.")
+                unban_user(cid, target_id)
+            send_message(chat_id, f"{get_user_link(from_id)} разблокировал-(а) в беседах сервера <<{server_id}>> {get_user_link(target_id)}")
         else:
-            success = 0
             for cid in get_all_server_chats():
-                if unban_user(cid, target_id):
-                    success += 1
-            if success:
-                send_message(chat_id, f"{get_user_link(from_id)} разблокировал во всех беседах сервера {get_user_link(target_id)}")
-            else:
-                send_message(chat_id, "Пользователь не был забанен ни в одной беседе.")
+                unban_user(cid, target_id)
+            send_message(chat_id, f"{get_user_link(from_id)} разблокировал-(а) во всех беседах сервера {get_user_link(target_id)}")
         return
 
     elif command == '/skick':
@@ -2517,31 +2493,14 @@ def handle_message(event):
             return
 
         chats_to_kick = server_chats[server_id] if server_id else get_all_server_chats()
-        success = 0
-        no_admin = []
-        failed = []
-        total = len(chats_to_kick)
         for cid in chats_to_kick:
             if not is_bot_admin(cid):
-                no_admin.append(cid)
                 continue
-            res, error = kick_user(cid, target_id)
-            if res:
-                success += 1
-                kick_msg = f"{get_user_link(from_id)} исключил-(а) в беседах сервера <<{server_id}>> {get_user_link(target_id)}\nПричина: {reason}"
-                send_message(cid, kick_msg)
-            else:
-                failed.append((cid, error))
+            kick_user(cid, target_id)
+            if cid != chat_id:
+                send_message(cid, f"{get_user_link(from_id)} исключил-(а) в беседах сервера <<{server_id}>> {get_user_link(target_id)}\nПричина: {reason}")
 
-        report = [f"{get_user_link(from_id)} исключил-(а) в {success}/{total} беседах сервера <<{server_id}>> {get_user_link(target_id)}",
-                  f"Причина: {reason}"]
-        if no_admin:
-            names = ", ".join(get_chat_name(c) for c in no_admin)
-            report.append(f"Нет прав администратора бота в: {names}")
-        if failed:
-            fail_text = "; ".join(f"{get_chat_name(c)} — {err}" for c, err in failed)
-            report.append(f"Другие ошибки: {fail_text}")
-        send_message(chat_id, "\n".join(report))
+        send_message(chat_id, f"{get_user_link(from_id)} исключил-(а) в беседах сервера <<{server_id}>> {get_user_link(target_id)}\nПричина: {reason}")
         return
 
     elif command == '/szov':
@@ -2609,23 +2568,19 @@ def handle_message(event):
             send_message(chat_id, "Недостаточно прав для выдачи этой роли.")
             return
         if server_id:
-            success = 0
             for cid in server_chats[server_id]:
                 if cid not in user_roles:
                     user_roles[cid] = {}
                 user_roles[cid][target_id] = role
-                success += 1
             save_roles()
-            send_message(chat_id, f"{get_user_link(from_id)} выдал роль «{role}» {get_user_link(target_id)} в беседах сервера <<{server_id}>>.")
+            send_message(chat_id, f"{get_user_link(from_id)} выдал-(а) роль «{role}» {get_user_link(target_id)} в беседах сервера <<{server_id}>>.")
         else:
-            success = 0
             for cid in get_all_server_chats():
                 if cid not in user_roles:
                     user_roles[cid] = {}
                 user_roles[cid][target_id] = role
-                success += 1
             save_roles()
-            send_message(chat_id, f"{get_user_link(from_id)} выдал роль «{role}» {get_user_link(target_id)} во всех беседах сервера.")
+            send_message(chat_id, f"{get_user_link(from_id)} выдал-(а) роль «{role}» {get_user_link(target_id)} во всех беседах сервера.")
         return
 
     elif command == '/sremoverole':
@@ -2645,31 +2600,21 @@ def handle_message(event):
                 send_message(chat_id, f"Сервер с ID {server_id} не существует.")
                 return
         if server_id:
-            removed = 0
             for cid in server_chats[server_id]:
                 if cid in user_roles and target_id in user_roles[cid]:
                     del user_roles[cid][target_id]
                     if not user_roles[cid]:
                         del user_roles[cid]
-                    removed += 1
-            if removed:
-                save_roles()
-                send_message(chat_id, f"{get_user_link(from_id)} снял роль с {get_user_link(target_id)} в беседах сервера <<{server_id}>>.")
-            else:
-                send_message(chat_id, "У пользователя нет роли в беседах этого сервера.")
+            save_roles()
+            send_message(chat_id, f"{get_user_link(from_id)} забрал-(а) роль у {get_user_link(target_id)} в беседах сервера <<{server_id}>>.")
         else:
-            removed = 0
             for cid in get_all_server_chats():
                 if cid in user_roles and target_id in user_roles[cid]:
                     del user_roles[cid][target_id]
                     if not user_roles[cid]:
                         del user_roles[cid]
-                    removed += 1
-            if removed:
-                save_roles()
-                send_message(chat_id, f"{get_user_link(from_id)} снял роль с {get_user_link(target_id)} во всех беседах сервера.")
-            else:
-                send_message(chat_id, "У пользователя нет роли ни в одной беседе сервера.")
+            save_roles()
+            send_message(chat_id, f"{get_user_link(from_id)} забрал-(а) роль у {get_user_link(target_id)} во всех беседах сервера.")
         return
 
     elif command == '/saddmod':
@@ -2692,23 +2637,19 @@ def handle_message(event):
                 send_message(chat_id, f"Сервер с ID {server_id} не существует.")
                 return
         if server_id:
-            success = 0
             for cid in server_chats[server_id]:
                 if cid not in user_roles:
                     user_roles[cid] = {}
                 user_roles[cid][target_id] = "Модератор"
-                success += 1
             save_roles()
-            send_message(chat_id, f"{get_user_link(from_id)} назначил {get_user_link(target_id)} Модератором в беседах сервера <<{server_id}>>.")
+            send_message(chat_id, f"{get_user_link(from_id)} назначил-(а) {get_user_link(target_id)} Модератором в беседах сервера <<{server_id}>>.")
         else:
-            success = 0
             for cid in get_all_server_chats():
                 if cid not in user_roles:
                     user_roles[cid] = {}
                 user_roles[cid][target_id] = "Модератор"
-                success += 1
             save_roles()
-            send_message(chat_id, f"{get_user_link(from_id)} назначил {get_user_link(target_id)} Модератором во всех беседах сервера.")
+            send_message(chat_id, f"{get_user_link(from_id)} назначил-(а) {get_user_link(target_id)} Модератором во всех беседах сервера.")
         return
 
     role_level = get_role_level(get_user_role(chat_id, from_id) or "")
@@ -2829,27 +2770,20 @@ def handle_message(event):
                 send_message(chat_id, f"Ник {get_user_link(target_id)} установлен во всех синхронизированных беседах: {nick}")
                 return
             elif command == '/gskick':
-                success = 0
                 for cid in global_sync_chats:
-                    if kick_user(cid, target_id)[0]:
-                        success += 1
-                send_message(chat_id, f"{get_user_link(target_id)} исключён из {success} синхронизированных бесед.")
+                    kick_user(cid, target_id)
+                send_message(chat_id, f"{get_user_link(target_id)} исключён во всех синхронизированных беседах.")
                 return
             elif command == '/gsban':
                 reason = ' '.join(parts[args_start:]) if args_start < len(parts) else "не указана"
-                success = 0
                 for cid in global_sync_chats:
-                    res, _ = ban_user(cid, target_id, from_id, reason)
-                    if res:
-                        success += 1
-                send_message(chat_id, f"{get_user_link(target_id)} забанен в {success} синхронизированных беседах.")
+                    ban_user(cid, target_id, from_id, reason)
+                send_message(chat_id, f"{get_user_link(target_id)} забанен во всех синхронизированных беседах.")
                 return
             elif command == '/gsunban':
-                success = 0
                 for cid in global_sync_chats:
-                    if unban_user(cid, target_id):
-                        success += 1
-                send_message(chat_id, f"{get_user_link(target_id)} разбанен в {success} синхронизированных беседах.")
+                    unban_user(cid, target_id)
+                send_message(chat_id, f"{get_user_link(target_id)} разбанен во всех синхронизированных беседах.")
                 return
             elif command == '/gszov':
                 for cid in global_sync_chats:
@@ -2890,15 +2824,11 @@ def handle_message(event):
             global_bans.add(target_id)
             save_global_bans()
             all_chats = get_all_server_chats()
-            success = 0
-            total = len(all_chats)
             for cid in all_chats:
-                res, _ = ban_user(cid, target_id, from_id, "Глобальный бан")
-                if res:
-                    success += 1
-                    ban_msg = f"{get_user_link(from_id)} применил глобальный бан к {get_user_link(target_id)}"
-                    send_message(cid, ban_msg)
-            send_message(chat_id, f"{get_user_link(target_id)} добавлен в глобальный бан. Забанен в {success}/{total} чатах.")
+                ban_user(cid, target_id, from_id, "Глобальный бан")
+                ban_msg = f"{get_user_link(from_id)} применил глобальный бан к {get_user_link(target_id)}"
+                send_message(cid, ban_msg)
+            send_message(chat_id, f"{get_user_link(target_id)} добавлен в глобальный бан во всех беседах сервера.")
             return
 
         elif command == '/gunbanpl':
@@ -3053,8 +2983,14 @@ def handle_message(event):
             return
 
         elif command == '/masskick':
+            if msg.get('fwd_messages') or msg.get('reply_message'):
+                if target_id and kick_user(chat_id, target_id)[0]:
+                    send_message(chat_id, f"Исключён {get_user_link(target_id)}.")
+                else:
+                    send_message(chat_id, "Не удалось исключить пользователя.")
+                return
             if len(parts) < 2:
-                send_message(chat_id, "Использование: /masskick @user1 @user2 ...")
+                send_message(chat_id, "Использование: /masskick @user1 @user2 ...\nЛибо ответьте на сообщение: /masskick")
                 return
             kicked = 0
             for part in parts[1:]:
@@ -3206,10 +3142,13 @@ def handle_message(event):
                 return
             action = parts[1].lower()
             if action == 'add':
-                if len(parts) < 3:
-                    send_message(chat_id, "Использование: /antitag add @user")
+                if msg.get('fwd_messages') or msg.get('reply_message'):
+                    uid = target_id
+                elif len(parts) >= 3:
+                    uid = extract_user_from_arg(parts[2])
+                else:
+                    send_message(chat_id, "Использование: /antitag add @user\nЛибо ответьте на сообщение: /antitag add")
                     return
-                uid = extract_user_from_arg(parts[2])
                 if not uid:
                     send_message(chat_id, "Укажите пользователя.")
                     return
@@ -3222,10 +3161,13 @@ def handle_message(event):
                 else:
                     send_message(chat_id, "Пользователь уже в списке.")
             elif action == 'remove':
-                if len(parts) < 3:
-                    send_message(chat_id, "Использование: /antitag remove @user")
+                if msg.get('fwd_messages') or msg.get('reply_message'):
+                    uid = target_id
+                elif len(parts) >= 3:
+                    uid = extract_user_from_arg(parts[2])
+                else:
+                    send_message(chat_id, "Использование: /antitag remove @user\nЛибо ответьте на сообщение: /antitag remove")
                     return
-                uid = extract_user_from_arg(parts[2])
                 if not uid:
                     send_message(chat_id, "Укажите пользователя.")
                     return
@@ -3261,23 +3203,31 @@ def handle_message(event):
         if not is_owner(from_id):
             send_message(chat_id, "Команда доступна только владельцу бота.")
             return
-        if len(parts) < 3:
-            send_message(chat_id, "Использование: /givecash @user <количество>")
-            return
-        target_id = extract_user_from_arg(parts[1])
-        if not target_id:
+        if msg.get('fwd_messages') or msg.get('reply_message'):
+            target_user = target_id
+            amount_index = 1
+        else:
+            if len(parts) < 3:
+                send_message(chat_id, "Использование: /givecash @user <количество>\nЛибо ответьте на сообщение: /givecash <количество>")
+                return
+            target_user = extract_user_from_arg(parts[1])
+            amount_index = 2
+        if not target_user:
             send_message(chat_id, "Не удалось определить пользователя.")
             return
+        if amount_index >= len(parts):
+            send_message(chat_id, "Укажите количество.")
+            return
         try:
-            amount = int(parts[2])
-        except ValueError:
+            amount = int(parts[amount_index])
+        except (ValueError, TypeError):
             send_message(chat_id, "Количество должно быть целым числом.")
             return
         if amount <= 0:
             send_message(chat_id, "Количество должно быть положительным.")
             return
-        add_money(target_id, amount)
-        send_message(chat_id, f"{get_user_link(target_id)} выдано {amount:,}$.")
+        add_money(target_user, amount)
+        send_message(chat_id, f"{get_user_link(target_user)} выдано {amount:,}$.")
         return
 
     if command == '/createpromo':
@@ -3548,19 +3498,27 @@ def handle_message(event):
         return
 
     if command == '/transfer' or command == '/передать':
-        if len(parts) < 3:
-            send_message(chat_id, "Использование: /передать @user <сумма>")
-            return
-        recipient = extract_user_from_arg(parts[1])
+        if msg.get('fwd_messages') or msg.get('reply_message'):
+            recipient = target_id
+            amount_index = 1
+        else:
+            if len(parts) < 3:
+                send_message(chat_id, "Использование: /передать @user <сумма>\nЛибо ответьте на сообщение: /передать <сумма>")
+                return
+            recipient = extract_user_from_arg(parts[1])
+            amount_index = 2
         if not recipient:
             send_message(chat_id, "Не удалось определить получателя.")
             return
+        if amount_index >= len(parts):
+            send_message(chat_id, "Укажите сумму.")
+            return
         try:
-            amount = int(parts[2])
+            amount = int(parts[amount_index])
             if amount <= 0:
                 send_message(chat_id, "Сумма должна быть положительной.")
                 return
-        except:
+        except (ValueError, TypeError):
             send_message(chat_id, "Сумма должна быть числом.")
             return
 
@@ -3644,22 +3602,30 @@ def handle_message(event):
         return
 
     if command == '/duel' or command == '/дуэль':
-        if len(parts) < 3:
-            send_message(chat_id, "Использование: /дуэль @user <сумма>")
-            return
-        opponent = extract_user_from_arg(parts[1])
+        if msg.get('fwd_messages') or msg.get('reply_message'):
+            opponent = target_id
+            amount_index = 1
+        else:
+            if len(parts) < 3:
+                send_message(chat_id, "Использование: /дуэль @user <сумма>\nЛибо ответьте на сообщение: /дуэль <сумма>")
+                return
+            opponent = extract_user_from_arg(parts[1])
+            amount_index = 2
         if not opponent:
             send_message(chat_id, "Не удалось определить противника.")
             return
         if opponent == from_id:
             send_message(chat_id, "Нельзя вызвать самого себя.")
             return
+        if amount_index >= len(parts):
+            send_message(chat_id, "Укажите сумму.")
+            return
         try:
-            amount = int(parts[2])
+            amount = int(parts[amount_index])
             if amount <= 0:
                 send_message(chat_id, "Сумма должна быть положительной.")
                 return
-        except:
+        except (ValueError, TypeError):
             send_message(chat_id, "Сумма должна быть числом.")
             return
 
@@ -3868,7 +3834,7 @@ def process_callback(event):
             except Exception as e:
                 print(f"Ошибка sendMessageEventAnswer (unmute): {e}")
             return
-        
+
     elif cmd == 'clear_mute':
         target_id = payload.get('user_id')
         reply_cmid = payload.get('reply_cmid')
