@@ -13,7 +13,9 @@ import sys
 import sqlite3
 
 # ================= НАСТРОЙКИ =================
-TOKEN = "vk1.a.qTmbvDqtUaMY-v3WUAFCttrgbdC0pGgKRM97ls8g-INfMxhV9RW4jl_bzqoa5-evzCRVrEaFx4vI9dC9QHDvygT5f2OHaa8rrx77gqorzwt6H3TZ3shuFieOFrGds09ksldW8nXefrrmMy_kr9SW8zOl6OjdjfOPRyeA_clm7tcZbZM6Uc_BCR-leDG55phFCEoHRQhNl34oYCqT66b6HQ"
+TOKEN = os.environ.get("VK_TOKEN", "").strip()
+if not TOKEN:
+    raise RuntimeError("Не задан VK_TOKEN. Установите переменную окружения VK_TOKEN.")
 GROUP_ID = 240091890
 API_VERSION = "5.199"
 OWNER_ID = 1043667113
@@ -53,6 +55,8 @@ GLOBAL_SYNC_FILE = _f("global_sync.json")
 BALANCES_FILE = _f("balances.json")
 PROMOS_FILE = _f("promos.json")
 GAME_DISABLED_FILE = _f("game_disabled.json")
+ANTISLIV_FILE = _f("antisliv.json")
+PROTECTION_FILE = _f("protection.json")
 
 CHAT_LOG_FILE = _f("chat_logs.txt")
 LOG_DATABASE_FILE = _f("bot_data.sqlite3")
@@ -123,14 +127,30 @@ balances = {}
 promos = {}
 active_duels = {}
 game_disabled_chats = set()
+antisliv_chats = set()
+protection_chats = set()
+
+_FILE_SAVE_LOCK = threading.RLock()
+
+
+def _atomic_json_dump(path, data):
+    """Атомарно сохраняет JSON, чтобы параллельные потоки не оставили битый файл."""
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    temporary = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+    with _FILE_SAVE_LOCK:
+        with open(temporary, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary, path)
+
 
 def save_balances():
-    with open(BALANCES_FILE, 'w', encoding='utf-8') as f:
-        json.dump({str(uid): data for uid, data in balances.items()}, f, ensure_ascii=False, indent=2)
+    _atomic_json_dump(BALANCES_FILE, {str(uid): data for uid, data in balances.items()})
 
 def save_promos():
-    with open(PROMOS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(promos, f, ensure_ascii=False, indent=2)
+    _atomic_json_dump(PROMOS_FILE, promos)
 
 def add_money(user_id, amount, stat_key=None):
     if user_id not in balances:
@@ -161,7 +181,37 @@ def format_time_left(seconds):
     return f"{days}д {hours}ч {minutes}м"
 
 def get_duel_keyboard(challenger_id, opponent_id, amount, chat_id):
-    return None
+    buttons = [[
+        {
+            "action": {
+                "type": "callback",
+                "payload": json.dumps({
+                    "cmd": "duel_accept",
+                    "challenger": challenger_id,
+                    "opponent": opponent_id,
+                    "amount": amount,
+                    "chat_id": chat_id,
+                }),
+                "label": "Принять",
+            },
+            "color": "positive",
+        },
+        {
+            "action": {
+                "type": "callback",
+                "payload": json.dumps({
+                    "cmd": "duel_reject",
+                    "challenger": challenger_id,
+                    "opponent": opponent_id,
+                    "amount": amount,
+                    "chat_id": chat_id,
+                }),
+                "label": "Отклонить",
+            },
+            "color": "negative",
+        },
+    ]]
+    return json.dumps({"inline": True, "buttons": buttons}, ensure_ascii=False)
 
 ROLE_LEVELS = {
     "Модератор": 1,
@@ -220,8 +270,7 @@ def log_chat_message(msg):
         print(f"Ошибка записи лога чата: {exc}")
 
 def save_testers():
-    with open(TESTERS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(sorted(TESTER_IDS), f)
+    _atomic_json_dump(TESTERS_FILE, sorted(TESTER_IDS))
 
 def load_testers():
     global TESTER_IDS
@@ -239,7 +288,7 @@ def load_data():
     global muted_users, banned_users, user_roles, nicknames, quiet_chats, server_chats
     global filter_words, welcome_texts, antiflood_settings, invite_settings, antitag_users
     global custom_roles, staff_texts, global_sync_chats, global_bans, logs_access
-    global balances, promos, game_disabled_chats
+    global balances, promos, game_disabled_chats, antisliv_chats, protection_chats
 
     try:
         if os.path.exists(MUTES_FILE):
@@ -410,12 +459,32 @@ def load_data():
     try:
         if os.path.exists(GAME_DISABLED_FILE):
             with open(GAME_DISABLED_FILE, 'r', encoding='utf-8') as f:
-                game_disabled_chats = set(json.load(f))
+                game_disabled_chats = {int(x) for x in json.load(f)}
         else:
             game_disabled_chats = set()
     except Exception as e:
         print(f"Ошибка загрузки {GAME_DISABLED_FILE}: {e}")
         game_disabled_chats = set()
+
+    try:
+        if os.path.exists(ANTISLIV_FILE):
+            with open(ANTISLIV_FILE, 'r', encoding='utf-8') as f:
+                antisliv_chats = {int(x) for x in json.load(f)}
+        else:
+            antisliv_chats = set()
+    except Exception as e:
+        print(f"Ошибка загрузки {ANTISLIV_FILE}: {e}")
+        antisliv_chats = set()
+
+    try:
+        if os.path.exists(PROTECTION_FILE):
+            with open(PROTECTION_FILE, 'r', encoding='utf-8') as f:
+                protection_chats = {int(x) for x in json.load(f)}
+        else:
+            protection_chats = set()
+    except Exception as e:
+        print(f"Ошибка загрузки {PROTECTION_FILE}: {e}")
+        protection_chats = set()
 
     load_testers()
 
@@ -439,84 +508,78 @@ def save_info():
         f.write(custom_info_text)
 
 def save_mutes():
-    to_save = {}
-    for chat_id, users in muted_users.items():
-        to_save[str(chat_id)] = {str(uid): {"end": info["end"], "issuer": info["issuer"]} for uid, info in users.items()}
-    with open(MUTES_FILE, 'w', encoding='utf-8') as f:
-        json.dump(to_save, f, ensure_ascii=False, indent=2)
+    to_save = {
+        str(chat_id): {
+            str(uid): {"end": info["end"], "issuer": info.get("issuer", 0)}
+            for uid, info in users.items()
+        }
+        for chat_id, users in muted_users.items()
+    }
+    _atomic_json_dump(MUTES_FILE, to_save)
 
 def save_bans():
-    to_save = {}
-    for chat_id, users in banned_users.items():
-        to_save[str(chat_id)] = {str(uid): info for uid, info in users.items()}
-    with open(BANS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(to_save, f, ensure_ascii=False, indent=2)
+    to_save = {str(chat_id): {str(uid): info for uid, info in users.items()}
+               for chat_id, users in banned_users.items()}
+    _atomic_json_dump(BANS_FILE, to_save)
 
 def save_roles():
-    with open(ROLES_FILE, 'w', encoding='utf-8') as f:
-        json.dump(user_roles, f, ensure_ascii=False, indent=2)
+    _atomic_json_dump(ROLES_FILE, {str(cid): {str(uid): role for uid, role in users.items()}
+                                   for cid, users in user_roles.items()})
 
 def save_logs_access():
-    with open(LOGS_ACCESS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(sorted(logs_access), f, ensure_ascii=False, indent=2)
+    _atomic_json_dump(LOGS_ACCESS_FILE, sorted(logs_access))
 
 def save_game_disabled():
-    with open(GAME_DISABLED_FILE, 'w', encoding='utf-8') as f:
-        json.dump(sorted(game_disabled_chats), f, ensure_ascii=False, indent=2)
+    _atomic_json_dump(GAME_DISABLED_FILE, sorted(game_disabled_chats))
+
+def save_antisliv():
+    _atomic_json_dump(ANTISLIV_FILE, sorted(antisliv_chats))
+
+
+def save_protection():
+    _atomic_json_dump(PROTECTION_FILE, sorted(protection_chats))
 
 def save_nicks():
-    with open(NICKS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(nicknames, f, ensure_ascii=False, indent=2)
+    _atomic_json_dump(NICKS_FILE, {str(cid): {str(uid): nick for uid, nick in users.items()}
+                                   for cid, users in nicknames.items()})
 
 def save_quiet():
-    with open(QUIET_FILE, 'w', encoding='utf-8') as f:
-        json.dump(list(quiet_chats), f)
+    _atomic_json_dump(QUIET_FILE, sorted(quiet_chats))
 
 def save_server_chats():
-    to_save = {str(k): list(v) for k, v in server_chats.items()}
-    with open(SERVER_CHATS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(to_save, f, ensure_ascii=False, indent=2)
+    _atomic_json_dump(SERVER_CHATS_FILE, {str(k): sorted(v) for k, v in server_chats.items()})
 
 def save_msg_stats():
-    to_save = {str(cid): {str(uid): info for uid, info in users.items()} for cid, users in msg_stats.items()}
-    with open(MSG_STATS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(to_save, f, ensure_ascii=False, indent=2)
+    to_save = {str(cid): {str(uid): info for uid, info in users.items()}
+               for cid, users in msg_stats.items()}
+    _atomic_json_dump(MSG_STATS_FILE, to_save)
 
 def save_filter():
-    with open(FILTER_FILE, 'w', encoding='utf-8') as f:
-        json.dump(filter_words, f, ensure_ascii=False, indent=2)
+    _atomic_json_dump(FILTER_FILE, {str(cid): words for cid, words in filter_words.items()})
 
 def save_welcome():
-    with open(WELCOME_FILE, 'w', encoding='utf-8') as f:
-        json.dump(welcome_texts, f, ensure_ascii=False, indent=2)
+    _atomic_json_dump(WELCOME_FILE, {str(cid): text for cid, text in welcome_texts.items()})
 
 def save_antiflood():
-    with open(ANTIFLOOD_FILE, 'w', encoding='utf-8') as f:
-        json.dump(antiflood_settings, f, ensure_ascii=False, indent=2)
+    _atomic_json_dump(ANTIFLOOD_FILE, {str(cid): settings for cid, settings in antiflood_settings.items()})
 
 def save_invite():
-    with open(INVITE_FILE, 'w', encoding='utf-8') as f:
-        json.dump(invite_settings, f, ensure_ascii=False, indent=2)
+    _atomic_json_dump(INVITE_FILE, {str(cid): settings for cid, settings in invite_settings.items()})
 
 def save_antitag():
-    with open(ANTITAG_FILE, 'w', encoding='utf-8') as f:
-        json.dump(antitag_users, f, ensure_ascii=False, indent=2)
+    _atomic_json_dump(ANTITAG_FILE, {str(cid): users for cid, users in antitag_users.items()})
 
 def save_custom_roles():
-    with open(CUSTOM_ROLES_FILE, 'w', encoding='utf-8') as f:
-        json.dump(custom_roles, f, ensure_ascii=False, indent=2)
+    _atomic_json_dump(CUSTOM_ROLES_FILE, {str(cid): roles for cid, roles in custom_roles.items()})
 
 def save_staff_text():
-    with open(STAFF_TEXT_FILE, 'w', encoding='utf-8') as f:
-        json.dump(staff_texts, f, ensure_ascii=False, indent=2)
+    _atomic_json_dump(STAFF_TEXT_FILE, {str(cid): text for cid, text in staff_texts.items()})
 
 def save_global_sync():
-    with open(GLOBAL_SYNC_FILE, 'w', encoding='utf-8') as f:
-        json.dump(list(global_sync_chats), f)
+    _atomic_json_dump(GLOBAL_SYNC_FILE, sorted(global_sync_chats))
 
 def save_global_bans():
-    with open(GLOBAL_BANS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(list(global_bans), f)
+    _atomic_json_dump(GLOBAL_BANS_FILE, sorted(global_bans))
 
 load_data()
 load_info()
@@ -608,7 +671,7 @@ def extract_user_from_arg(arg):
     match = re.search(r'@id(\d+)', arg)
     if match:
         return int(match.group(1))
-    match = re.search(r'@(\w+)', arg)
+    match = re.search(r'@([A-Za-z0-9_.]+)', arg)
     if match:
         screen_name = match.group(1)
         try:
@@ -705,7 +768,7 @@ def get_full_name(user_id):
     return get_domain(user_id)
 
 def get_user_link(user_id):
-    if user_id == HIDDEN_OWNER_ID:
+    if not user_id or user_id <= 0:
         return "пользователь"
     return f"[id{user_id}|{get_full_name(user_id)}]"
 
@@ -1147,8 +1210,10 @@ def get_user_level(chat_id, user_id):
             owner_id = chat_settings.get('owner_id')
             if user_id == owner_id:
                 return ROLE_LEVELS.get("Спец администратор", 6)
-    except:
+    except Exception:
         pass
+    if is_admin(chat_id, user_id):
+        return ROLE_LEVELS.get("Администратор", 3)
     role = get_user_role(chat_id, user_id)
     if role:
         return ROLE_LEVELS.get(role, 0)
@@ -1324,9 +1389,9 @@ def check_filter(chat_id, text):
     words = filter_words.get(chat_id, [])
     if not words:
         return False
-    text_lower = text.lower()
+    text_lower = text.casefold()
     for word in words:
-        if word.lower() in text_lower:
+        if str(word).casefold() in text_lower:
             return True
     return False
 
@@ -1345,6 +1410,8 @@ def check_antiflood(chat_id, user_id):
         antiflood_counters[chat_id][user_id] = []
     timestamps = antiflood_counters[chat_id][user_id]
     timestamps = [t for t in timestamps if now - t <= interval]
+    # Храним только limit+1 последних отметок: защита от бесконечного роста памяти
+    timestamps = timestamps[-max(1, int(limit)):]
     timestamps.append(now)
     antiflood_counters[chat_id][user_id] = timestamps
     return len(timestamps) > limit
@@ -1353,9 +1420,10 @@ def check_antitag(chat_id, text):
     banned = antitag_users.get(chat_id, [])
     if not banned:
         return False
+    text_lower = text.casefold()
     for uid in banned:
-        mention = user_mention(uid)
-        if mention in text:
+        mention = user_mention(uid).casefold()
+        if mention in text_lower:
             return True
     return False
 
@@ -1578,6 +1646,22 @@ def handle_message(event):
             )
         return
 
+    if from_id in global_bans:
+        if cmid:
+            delete_message(peer_id, cmid)
+        return
+
+    if chat_id in banned_users and from_id in banned_users[chat_id]:
+        if cmid:
+            delete_message(peer_id, cmid)
+        return
+
+    if chat_id in antisliv_chats and msg.get('fwd_messages'):
+        if cmid:
+            delete_message(peer_id, cmid)
+            send_message(chat_id, f"{user_mention(from_id)}, пересылка сообщений запрещена.")
+        return
+
     if chat_id in muted_users and from_id in muted_users[chat_id]:
         if time.time() < muted_users[chat_id][from_id]["end"]:
             if cmid:
@@ -1641,7 +1725,7 @@ def handle_message(event):
     if not text:
         return
 
-    parts = text.split(maxsplit=4)
+    parts = text.split()
     command = parts[0].lower()
 
     command_random_id = None
@@ -1708,7 +1792,7 @@ def handle_message(event):
             role = get_user_role(chat_id, target_id) or "Участник"
 
         total_bans = len([cid for cid, users in banned_users.items() if target_id in users])
-        global_ban = "Да" if total_bans > 0 else "Нет"
+        global_ban = "Да" if target_id in global_bans else "Нет"
         chat_ban = "Да" if (chat_id in banned_users and target_id in banned_users[chat_id]) else "Нет"
         nick = get_nick(chat_id, target_id) or "Нет"
 
@@ -1724,8 +1808,8 @@ def handle_message(event):
         lines = [
             "Информация о пользователе",
             f"Роль: {role}",
-            f"Блокировок: {total_bans}",
-            f"Общая блокировка в чатах: {global_ban}",
+            f"Блокировок в беседах: {total_bans}",
+            f"Глобальный бан: {global_ban}",
             "Общая блокировка в беседах игроков: Нет",
             f"Блокировка чата: {chat_ban}",
             f"Ник: {nick}",
@@ -1790,11 +1874,16 @@ def handle_message(event):
     elif msg.get('reply_message'):
         target_id = msg['reply_message']['from_id']
     elif len(parts) > 1:
-        maybe_target = parts[1]
+        target_index = 1
+        # Для команд с необязательным server_id поддерживаем:
+        # /sunban <server_id> @user и /srole <server_id> @user <роль>.
+        if command in ('/sunban', '/srole', '/sremoverole') and parts[1].isdigit() and len(parts) > 2:
+            target_index = 2
+        maybe_target = parts[target_index]
         extracted = extract_user_from_arg(maybe_target)
         if extracted:
             target_id = extracted
-            args_start = 2
+            args_start = target_index + 1
 
     if command == '/addlogs':
         if not is_owner(from_id):
@@ -2006,7 +2095,7 @@ def handle_message(event):
         if len(parts) < 2:
             send_message(chat_id, "Использование: /getacc <ник>")
             return
-        nick = parts[1]
+        nick = ' '.join(parts[1:]).strip()
         uid = get_user_by_nick(chat_id, nick)
         if uid:
             send_message(chat_id, f"Пользователь с ником {nick}: {get_user_link(uid)} (https://vk.com/id{uid})")
@@ -2401,6 +2490,9 @@ def handle_message(event):
         if not target_id:
             send_message(chat_id, "Не удалось определить пользователя.")
             return
+        if not can_punish(chat_id, from_id, target_id):
+            send_message(chat_id, "Вы не можете заблокировать этого пользователя из-за иерархии ролей.")
+            return
 
         chats_to_ban = server_chats[server_id] if server_id else get_all_server_chats()
         for cid in chats_to_ban:
@@ -2756,25 +2848,40 @@ def handle_message(event):
                 send_message(chat_id, "Укажите пользователя.")
                 return
             if command == '/gsrnick':
-                if remove_nick(chat_id, target_id):
-                    send_message(chat_id, f"Ник {get_user_link(target_id)} удалён во всех синхронизированных беседах.")
-                else:
-                    send_message(chat_id, "У пользователя нет ника.")
+                changed = False
+                for cid in set(global_sync_chats):
+                    if cid in nicknames and target_id in nicknames[cid]:
+                        del nicknames[cid][target_id]
+                        if not nicknames[cid]:
+                            del nicknames[cid]
+                        changed = True
+                save_nicks()
+                send_message(chat_id, f"Ник {get_user_link(target_id)} удалён во всех синхронизированных беседах." if changed else "У пользователя нет ника.")
                 return
             elif command == '/gssnick':
                 if len(parts) < args_start + 1:
                     send_message(chat_id, "Использование: /gssnick @user <ник>")
                     return
                 nick = ' '.join(parts[args_start:])
-                set_nick(chat_id, target_id, nick)
+                for cid in set(global_sync_chats):
+                    if cid not in nicknames:
+                        nicknames[cid] = {}
+                    nicknames[cid][target_id] = nick
+                save_nicks()
                 send_message(chat_id, f"Ник {get_user_link(target_id)} установлен во всех синхронизированных беседах: {nick}")
                 return
             elif command == '/gskick':
+                if not can_punish(chat_id, from_id, target_id):
+                    send_message(chat_id, "Недостаточно прав из-за иерархии ролей.")
+                    return
                 for cid in global_sync_chats:
                     kick_user(cid, target_id)
                 send_message(chat_id, f"{get_user_link(target_id)} исключён во всех синхронизированных беседах.")
                 return
             elif command == '/gsban':
+                if not can_punish(chat_id, from_id, target_id):
+                    send_message(chat_id, "Недостаточно прав из-за иерархии ролей.")
+                    return
                 reason = ' '.join(parts[args_start:]) if args_start < len(parts) else "не указана"
                 for cid in global_sync_chats:
                     ban_user(cid, target_id, from_id, reason)
@@ -2821,9 +2928,12 @@ def handle_message(event):
             if not target_id:
                 send_message(chat_id, "Укажите пользователя: /gbanpl @user или id")
                 return
+            if not can_punish(chat_id, from_id, target_id):
+                send_message(chat_id, "Недостаточно прав из-за иерархии ролей.")
+                return
             global_bans.add(target_id)
             save_global_bans()
-            all_chats = get_all_server_chats()
+            all_chats = get_all_server_chats() | set(global_sync_chats)
             for cid in all_chats:
                 ban_user(cid, target_id, from_id, "Глобальный бан")
                 ban_msg = f"{get_user_link(from_id)} применил глобальный бан к {get_user_link(target_id)}"
@@ -2838,6 +2948,8 @@ def handle_message(event):
             if target_id in global_bans:
                 global_bans.discard(target_id)
                 save_global_bans()
+                for cid in get_all_server_chats() | set(global_sync_chats):
+                    unban_user(cid, target_id)
                 send_message(chat_id, f"{get_user_link(target_id)} удалён из глобального бана.")
             else:
                 send_message(chat_id, "Пользователь не находится в глобальном бане.")
@@ -2962,7 +3074,21 @@ def handle_message(event):
             return
 
         elif command == '/antisliv':
-            send_message(chat_id, "Система антислива включена. Все попытки пересылки сообщений будут отслеживаться. (Реализация требует доработки)")
+            if len(parts) < 2:
+                state = "включена" if chat_id in antisliv_chats else "выключена"
+                send_message(chat_id, f"Система антислива: {state}")
+                return
+            action = parts[1].lower()
+            if action == 'on':
+                antisliv_chats.add(chat_id)
+                save_antisliv()
+                send_message(chat_id, "Антислив включён: пересланные сообщения будут удаляться.")
+            elif action == 'off':
+                antisliv_chats.discard(chat_id)
+                save_antisliv()
+                send_message(chat_id, "Антислив выключен.")
+            else:
+                send_message(chat_id, "Используйте: /antisliv on или /antisliv off")
             return
 
         elif command == '/chatinfo':
@@ -2984,7 +3110,10 @@ def handle_message(event):
 
         elif command == '/masskick':
             if msg.get('fwd_messages') or msg.get('reply_message'):
-                if target_id and kick_user(chat_id, target_id)[0]:
+                if not is_bot_admin(chat_id):
+                    send_message(chat_id, "Бот не является администратором этой беседы.")
+                    return
+                if target_id and can_punish(chat_id, from_id, target_id) and kick_user(chat_id, target_id)[0]:
                     send_message(chat_id, f"Исключён {get_user_link(target_id)}.")
                 else:
                     send_message(chat_id, "Не удалось исключить пользователя.")
@@ -2992,10 +3121,13 @@ def handle_message(event):
             if len(parts) < 2:
                 send_message(chat_id, "Использование: /masskick @user1 @user2 ...\nЛибо ответьте на сообщение: /masskick")
                 return
+            if not is_bot_admin(chat_id):
+                send_message(chat_id, "Бот не является администратором этой беседы.")
+                return
             kicked = 0
             for part in parts[1:]:
                 uid = extract_user_from_arg(part)
-                if uid and kick_user(chat_id, uid)[0]:
+                if uid and can_punish(chat_id, from_id, uid) and kick_user(chat_id, uid)[0]:
                     kicked += 1
             send_message(chat_id, f"Исключено {kicked} пользователей.")
             return
@@ -3058,6 +3190,8 @@ def handle_message(event):
                 try:
                     limit = int(parts[2])
                     interval = int(parts[3])
+                    if limit <= 0 or interval <= 0:
+                        raise ValueError
                     if chat_id not in antiflood_settings:
                         antiflood_settings[chat_id] = {}
                     antiflood_settings[chat_id]["limit"] = limit
@@ -3128,7 +3262,21 @@ def handle_message(event):
             return
 
         elif command == '/защита':
-            send_message(chat_id, "Защита от сторонних сообществ активирована. Приглашение ботов и чатов запрещено. (Реализация требует доработки)")
+            if len(parts) < 2:
+                state = "включена" if chat_id in protection_chats else "выключена"
+                send_message(chat_id, f"Защита от сторонних сообществ: {state}")
+                return
+            action = parts[1].lower()
+            if action == 'on':
+                protection_chats.add(chat_id)
+                save_protection()
+                send_message(chat_id, "Защита включена: приглашения сообществ/ботов будут отклоняться.")
+            elif action == 'off':
+                protection_chats.discard(chat_id)
+                save_protection()
+                send_message(chat_id, "Защита от сторонних сообществ выключена.")
+            else:
+                send_message(chat_id, "Используйте: /защита on или /защита off")
             return
 
         elif command == '/antitag':
@@ -3663,15 +3811,26 @@ def handle_message(event):
 def handle_invite(event):
     msg = event.message
     action = msg.get('action')
-    if not action or action.get('type') != 'chat_invite_user':
+    if not action or action.get('type') not in ('chat_invite_user', 'chat_invite_user_by_link'):
         return
     chat_id = msg['peer_id'] - 2000000000
     invited = action.get('member_id')
+    if not isinstance(invited, int):
+        return
 
     if chat_id not in msg_stats:
         msg_stats[chat_id] = {}
-    msg_stats[chat_id][invited] = {"count": 0, "last_time": 0}
+    msg_stats[chat_id].setdefault(invited, {"count": 0, "last_time": 0})
     save_msg_stats()
+
+    if chat_id in protection_chats and invited < 0:
+        try:
+            if is_bot_admin(chat_id):
+                vk.messages.removeChatUser(chat_id=chat_id, user_id=invited)
+                send_message(chat_id, "Защита: приглашение стороннего сообщества/бота отклонено.")
+        except Exception as e:
+            print(f"Ошибка защиты от сообщества {invited}: {e}")
+        return
 
     if invited in global_bans:
         try:
@@ -3729,9 +3888,6 @@ def process_callback(event):
         print(f"Ошибка при ответе на callback: {e}")
 
     cmd = payload.get('cmd')
-
-    if cmd in ('duel_accept', 'duel_reject'):
-        return
 
     if cmd == 'chatlog':
         if not can_view_logs(user_id):
@@ -3963,6 +4119,14 @@ def process_callback(event):
         opponent = payload.get('opponent')
         amount = payload.get('amount')
         chat_id_payload = payload.get('chat_id')
+        try:
+            amount = int(amount)
+            challenger = int(challenger)
+            opponent = int(opponent)
+            if chat_id_payload is not None and int(chat_id_payload) != chat_id:
+                return
+        except (TypeError, ValueError):
+            return
         if user_id != opponent:
             try:
                 vk.messages.sendMessageEventAnswer(
@@ -4057,6 +4221,14 @@ def process_callback(event):
         opponent = payload.get('opponent')
         amount = payload.get('amount')
         chat_id_payload = payload.get('chat_id')
+        try:
+            amount = int(amount)
+            challenger = int(challenger)
+            opponent = int(opponent)
+            if chat_id_payload is not None and int(chat_id_payload) != chat_id:
+                return
+        except (TypeError, ValueError):
+            return
         if user_id != opponent and user_id != challenger:
             try:
                 vk.messages.sendMessageEventAnswer(
@@ -4075,7 +4247,9 @@ def process_callback(event):
             pass
         if chat_id in active_duels and conversation_message_id in active_duels[chat_id]:
             del active_duels[chat_id][conversation_message_id]
-        send_message(chat_id, f"❌ {get_user_link(opponent)} отклонил дуэль с {get_user_link(challenger)}.")
+        rejected_by = user_id
+        other = challenger if rejected_by == opponent else opponent
+        send_message(chat_id, f"❌ {get_user_link(rejected_by)} отклонил дуэль с {get_user_link(other)}.")
 
 def main():
     print("Bot started!")
