@@ -3823,7 +3823,7 @@ def handle_message(event):
             f"🎰 РЕЗУЛЬТАТЫ КАЗИНО\n"
             f"🤵‍♂️ Игрок: {get_user_link(from_id)}\n"
             f"🤑 Ставка: {amount:,}$\n"
-            f"🎯 Выпавшие предметы: {' '.join(roll)}\n"
+            f"🎯 Выпавшие предметы: [ {' '.join(roll)} ]\n"
             f"{result_text}\n"
             f"💎 Стартовый баланс: {user_data['balance'] - (win - amount):,}$\n"
             f"💎 Новый баланс: {user_data['balance']:,}$"
@@ -3831,7 +3831,7 @@ def handle_message(event):
         send_message(chat_id, message)
         return
 
-    if command in ('/prize', '/приз'):
+    if command in ('/bonus', '/приз'):
         user_data = balances.get(from_id)
         if not user_data:
             user_data = {
@@ -4019,7 +4019,7 @@ def handle_message(event):
         for i, (uid, balance, vip) in enumerate(top_list, 1):
             status = "VIP" if vip else ""
             nick = get_nick(chat_id, uid) or ""
-            name = get_user_link(uid)
+            name = f"[id{uid}|{get_full_name(uid)}]"
             if nick:
                 name += f" ({nick})"
             line = f"Топ: {i} 👑: {status} {name} | {balance:,}$"
