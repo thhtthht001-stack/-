@@ -75,8 +75,6 @@ ANTITAG_FILE = "antitag.json"
 CUSTOM_ROLES_FILE = "custom_roles.json"
 STAFF_TEXT_FILE = "staff_text.json"
 GLOBAL_SYNC_FILE = "global_sync.json"
-FORM_CHATS_FILE = "form_chats.json"
-FORMS_FILE = "forms.json"
 BALANCES_FILE = "balances.json"
 PROMOS_FILE = "promos.json"
 GAME_DISABLED_FILE = "game_disabled.json"
@@ -116,9 +114,6 @@ antitag_users = {}
 custom_roles = {}
 staff_texts = {}
 global_sync_chats = set()
-form_chats = set()
-form_counters = {}
-active_forms = {}
 
 restart_scheduled = False
 balances = {}
@@ -240,7 +235,7 @@ def load_testers():
 def load_data():
     global muted_users, banned_users, user_roles, nicknames, warns, quiet_chats, server_chats
     global filter_words, welcome_texts, antiflood_settings, invite_settings, antitag_users
-    global custom_roles, staff_texts, global_sync_chats, form_chats, active_forms, form_counters, global_bans, logs_access
+    global custom_roles, staff_texts, global_sync_chats, global_bans, logs_access
     global balances, promos, game_disabled_chats
 
     try:
@@ -375,34 +370,6 @@ def load_data():
                 global_sync_chats = set(json.load(f))
     except Exception as e:
         print(f"Ошибка загрузки {GLOBAL_SYNC_FILE}: {e}")
-
-    try:
-        if os.path.exists(FORM_CHATS_FILE):
-            with open(FORM_CHATS_FILE, 'r', encoding='utf-8') as f:
-                form_chats = set(json.load(f))
-    except Exception as e:
-        print(f"Ошибка загрузки {FORM_CHATS_FILE}: {e}")
-
-    try:
-        if os.path.exists(FORMS_FILE):
-            with open(FORMS_FILE, 'r', encoding='utf-8') as f:
-                raw = json.load(f)
-                active_forms = {}
-                form_counters = {}
-                for k, v in raw.get("active_forms", {}).items():
-                    chat_id_str, num_str = k.split(":")
-                    chat_id = int(chat_id_str)
-                    num = int(num_str)
-                    active_forms[(chat_id, num)] = v
-                for k, v in raw.get("form_counters", {}).items():
-                    form_counters[int(k)] = v
-        else:
-            active_forms = {}
-            form_counters = {}
-    except Exception as e:
-        print(f"Ошибка загрузки {FORMS_FILE}: {e}")
-        active_forms = {}
-        form_counters = {}
 
     try:
         if os.path.exists(GLOBAL_BANS_FILE):
@@ -556,21 +523,6 @@ def save_global_sync():
     with open(GLOBAL_SYNC_FILE, 'w', encoding='utf-8') as f:
         json.dump(list(global_sync_chats), f)
 
-def save_form_chats():
-    with open(FORM_CHATS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(list(form_chats), f)
-
-def save_forms():
-    to_save = {
-        "active_forms": {},
-        "form_counters": {str(k): v for k, v in form_counters.items()}
-    }
-    for (chat_id, num), data in active_forms.items():
-        key = f"{chat_id}:{num}"
-        to_save["active_forms"][key] = data
-    with open(FORMS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(to_save, f, ensure_ascii=False, indent=2)
-
 def save_global_bans():
     with open(GLOBAL_BANS_FILE, 'w', encoding='utf-8') as f:
         json.dump(list(global_bans), f)
@@ -719,6 +671,9 @@ def is_bot_admin(chat_id):
     return False
 
 def send_message(chat_id, text, keyboard=None, random_id=None):
+    # VK ограничивает 4096 символов на сообщение
+    if len(text) > 4000:
+        text = text[:3990] + "\n...[сообщение обрезано]"
     now = time.time()
     text_hash = hashlib.md5(text.encode()).hexdigest()
     cache_key = (chat_id, text_hash)
@@ -1286,7 +1241,6 @@ def ban_user(chat_id, user_id, from_id, reason=""):
     if user_id == BOT_ID:
         return False, "нельзя забанить самого бота"
 
-    # Сохраняем бан всегда
     if chat_id not in banned_users:
         banned_users[chat_id] = {}
     role = get_user_role(chat_id, from_id) or "Администратор"
@@ -1571,9 +1525,7 @@ def get_help_text_and_keyboard(chat_id, from_id):
                   "/защита — защита от сторонних сообществ",
                   "/setinfo — установить информацию о ресурсах в «/info»",
                   "/antitag — запретить упоминать определённых пользователей",
-                  "/newrole — изменить название роли в беседе",
-                  "/form — включение/выключение режима форм (on/off)",
-                  "/formu — вывести готовую команду бана по номеру формы"]
+                  "/newrole — изменить название роли в беседе"]
 
     if is_owner(from_id):
         lines += ["",
@@ -1597,6 +1549,27 @@ def get_help_text_and_keyboard(chat_id, from_id):
         }]]
         keyboard = json.dumps({"inline": True, "buttons": buttons})
     return "\n".join(lines), keyboard
+
+def send_help(chat_id, from_id):
+    """Отправляет справку, при необходимости разбивая её на части (лимит VK 4096)."""
+    help_text, help_keyboard = get_help_text_and_keyboard(chat_id, from_id)
+    MAX_LEN = 4000
+    if len(help_text) <= MAX_LEN:
+        send_message(chat_id, help_text, keyboard=help_keyboard)
+        return
+    chunks = []
+    current = ""
+    for line in help_text.split("\n"):
+        if len(current) + len(line) + 1 > MAX_LEN:
+            chunks.append(current)
+            current = line
+        else:
+            current = (current + "\n" + line) if current else line
+    if current:
+        chunks.append(current)
+    for i, chunk in enumerate(chunks):
+        kb = help_keyboard if i == len(chunks) - 1 else None
+        send_message(chat_id, chunk, keyboard=kb)
 
 def handle_message(event):
     global custom_info_text
@@ -1715,125 +1688,6 @@ def handle_message(event):
     if not text:
         return
 
-    # ===== ПЕРЕКЛЮЧЕНИЕ РЕЖИМА ФОРМ =====
-    if text.lower().startswith('/form') and len(text.split()) >= 2 and text.split()[1].lower() in ('on', 'off'):
-        parts_cmd = text.split()
-        action = parts_cmd[1].lower()
-        role_level = get_role_level(get_user_role(chat_id, from_id) or "")
-        if is_owner(from_id):
-            role_level = 99
-        if role_level < 6:
-            send_message(chat_id, "Недостаточно прав для управления режимом формы.")
-            return
-        if action == 'on':
-            form_chats.add(chat_id)
-            save_form_chats()
-            send_message(chat_id, "Режим формы включен. Все сообщения, кроме /form и /formu, будут игнорироваться.")
-        else:
-            form_chats.discard(chat_id)
-            save_form_chats()
-            send_message(chat_id, "Режим формы выключен.")
-        return
-
-    # ========== РЕЖИМ ФОРМЫ (создание) ==========
-    if chat_id in form_chats:
-        if text.lower().startswith('/formu'):
-            pass
-        elif text.lower().startswith('/form'):
-            form_text = text[5:].strip()
-            if not form_text:
-                send_message(chat_id, "Использование: /form /ban @user причина")
-                return
-            parts_form = form_text.split(maxsplit=1)
-            if not parts_form:
-                send_message(chat_id, "Неверный формат команды.")
-                return
-            cmd_form = parts_form[0].lower()
-            rest = parts_form[1] if len(parts_form) > 1 else ""
-
-            if cmd_form != '/ban':
-                send_message(chat_id, "В форме доступна только команда: /ban")
-                return
-
-            target_id = None
-            reason = "не указана"
-            user_match = re.search(r'\[id(\d+)\|.*?\]|@id(\d+)', rest)
-            if user_match:
-                target_id = int(user_match.group(1) or user_match.group(2))
-                reason = (rest[:user_match.start()] + rest[user_match.end():]).strip()
-            else:
-                extracted = extract_user_from_arg(rest)
-                if extracted:
-                    target_id = extracted
-                    rest_no_mention = rest
-                    for pattern in [r'\[id\d+\|.*?\]', r'@id\d+', r'@\w+']:
-                        rest_no_mention = re.sub(pattern, '', rest_no_mention)
-                    reason = rest_no_mention.strip() or "не указана"
-                else:
-                    send_message(chat_id, "Не удалось найти пользователя. Укажите @user или id.")
-                    return
-            if not target_id:
-                send_message(chat_id, "Не удалось найти пользователя.")
-                return
-
-            if chat_id not in form_counters:
-                form_counters[chat_id] = 1
-            else:
-                form_counters[chat_id] += 1
-            form_number = form_counters[chat_id]
-            active_forms[(chat_id, form_number)] = {
-                "target_id": target_id,
-                "reason": reason,
-                "creator_id": from_id
-            }
-            save_forms()
-
-            user_link = get_user_link(target_id)
-            form_message = f"Форма #{form_number}: Бан для {user_link}\nПричина: {reason}"
-
-            payload_accept = json.dumps({
-                "cmd": "form_action",
-                "action": "accept",
-                "form_number": form_number
-            })
-            payload_reject = json.dumps({
-                "cmd": "form_action",
-                "action": "reject",
-                "form_number": form_number
-            })
-            keyboard = {
-                "inline": True,
-                "buttons": [
-                    [
-                        {
-                            "action": {
-                                "type": "callback",
-                                "payload": payload_reject,
-                                "label": "Отклонить"
-                            },
-                            "color": "negative"
-                        },
-                        {
-                            "action": {
-                                "type": "callback",
-                                "payload": payload_accept,
-                                "label": "Принять"
-                            },
-                            "color": "positive"
-                        }
-                    ]
-                ]
-            }
-            vk.messages.send(
-                peer_id=peer_id,
-                message=form_message,
-                random_id=get_random_id(),
-                keyboard=json.dumps(keyboard)
-            )
-            return
-        else:
-            return
-
     parts = text.split(maxsplit=4)
     command = parts[0].lower()
 
@@ -1863,35 +1717,8 @@ def handle_message(event):
         threading.Timer(30, restart_bot).start()
         return
 
-    if command == '/formu':
-        if chat_id not in form_chats:
-            send_message(chat_id, "Команда /formu доступна только при включённом режиме форм (/form on).")
-            return
-        if len(parts) < 2:
-            send_message(chat_id, "Использование: /formu #номер")
-            return
-        arg = parts[1]
-        if arg.startswith('#') and arg[1:].isdigit():
-            number = int(arg[1:])
-        elif arg.isdigit():
-            number = int(arg)
-        else:
-            send_message(chat_id, "Укажите номер формы, например /formu #1")
-            return
-        form_key = (chat_id, number)
-        if form_key not in active_forms:
-            send_message(chat_id, f"Форма с номером {number} не найдена.")
-            return
-        form_data = active_forms[form_key]
-        target_id = form_data['target_id']
-        reason = form_data['reason']
-        cmd_text = f"/ban {target_id} {reason}"
-        send_message(chat_id, cmd_text)
-        return
-
     if command in ('/help', '/хелп'):
-        help_text, help_keyboard = get_help_text_and_keyboard(chat_id, from_id)
-        send_message(chat_id, help_text, keyboard=help_keyboard)
+        send_help(chat_id, from_id)
         return
     if command in ('/info', '/инфо'):
         send_message(chat_id, custom_info_text)
@@ -3593,24 +3420,6 @@ def handle_message(event):
             send_message(chat_id, f"Название роли «{old}» изменено на «{new}» в этой беседе.")
             return
 
-        elif command == '/form':
-            if len(parts) < 2:
-                state = "включен" if chat_id in form_chats else "выключен"
-                send_message(chat_id, f"Режим формы: {state}")
-                return
-            action = parts[1].lower()
-            if action == 'on':
-                form_chats.add(chat_id)
-                save_form_chats()
-                send_message(chat_id, "Режим формы включен. Все сообщения, кроме /form и /formu, будут игнорироваться.")
-            elif action == 'off':
-                form_chats.discard(chat_id)
-                save_form_chats()
-                send_message(chat_id, "Режим формы выключен.")
-            else:
-                send_message(chat_id, "Использование: /form on или /form off")
-            return
-
     if command == '/givecash':
         if not is_owner(from_id):
             send_message(chat_id, "Команда доступна только владельцу бота.")
@@ -4324,23 +4133,12 @@ def process_callback(event):
             )
         except Exception as e:
             print(f"Ошибка редактирования show_help: {e}")
-
-    elif cmd == 'form_action':
-        action = payload.get('action')
-        form_number = payload.get('form_number', '?')
-        if action == 'accept':
-            new_text = f"#{form_number} Форма принята."
-        elif action == 'reject':
-            new_text = f"#{form_number} Форма отклонена."
-        else:
-            return
-
-        try:
-            if conversation_message_id:
+            # Если не влезло — удаляем и отправляем частями
+            try:
                 vk.messages.delete(peer_id=peer_id, cmids=[conversation_message_id], delete_for_all=True)
-        except:
-            pass
-        send_message(chat_id, new_text)
+            except:
+                pass
+            send_help(chat_id, user_id)
 
     elif cmd == 'unban_btn':
         target_id = payload.get('user_id')
