@@ -23,7 +23,6 @@ MUTES_FILE = "mutes.json"
 BANS_FILE = "bans.json"
 ROLES_FILE = "roles.json"
 NICKS_FILE = "nicks.json"
-WARNS_FILE = "warns.json"
 QUIET_FILE = "quiet.json"
 SERVER_CHATS_FILE = "server_chats.json"
 INFO_FILE = "info_text.json"
@@ -90,7 +89,6 @@ banned_users = {}
 user_roles = {}
 user_domains = {}
 nicknames = {}
-warns = {}
 quiet_chats = set()
 server_chats = {}
 custom_info_text = ""
@@ -233,7 +231,7 @@ def load_testers():
         TESTER_IDS = set()
 
 def load_data():
-    global muted_users, banned_users, user_roles, nicknames, warns, quiet_chats, server_chats
+    global muted_users, banned_users, user_roles, nicknames, quiet_chats, server_chats
     global filter_words, welcome_texts, antiflood_settings, invite_settings, antitag_users
     global custom_roles, staff_texts, global_sync_chats, global_bans, logs_access
     global balances, promos, game_disabled_chats
@@ -285,14 +283,6 @@ def load_data():
                 nicknames = {int(k): {int(uid): nick for uid, nick in v.items()} for k, v in raw.items()}
     except Exception as e:
         print(f"Ошибка загрузки {NICKS_FILE}: {e}")
-
-    try:
-        if os.path.exists(WARNS_FILE):
-            with open(WARNS_FILE, 'r', encoding='utf-8') as f:
-                raw = json.load(f)
-                warns = {int(k): {int(uid): list(w) for uid, w in v.items()} for k, v in raw.items()}
-    except Exception as e:
-        print(f"Ошибка загрузки {WARNS_FILE}: {e}")
 
     try:
         if os.path.exists(QUIET_FILE):
@@ -472,10 +462,6 @@ def save_game_disabled():
 def save_nicks():
     with open(NICKS_FILE, 'w', encoding='utf-8') as f:
         json.dump(nicknames, f, ensure_ascii=False, indent=2)
-
-def save_warns():
-    with open(WARNS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(warns, f, ensure_ascii=False, indent=2)
 
 def save_quiet():
     with open(QUIET_FILE, 'w', encoding='utf-8') as f:
@@ -671,7 +657,6 @@ def is_bot_admin(chat_id):
     return False
 
 def send_message(chat_id, text, keyboard=None, random_id=None):
-    # VK ограничивает 4096 символов на сообщение
     if len(text) > 4000:
         text = text[:3990] + "\n...[сообщение обрезано]"
     now = time.time()
@@ -1287,37 +1272,6 @@ def unban_user(chat_id, user_id):
         return True
     return False
 
-def add_warn(chat_id, user_id, issuer_id, reason=""):
-    if chat_id not in warns:
-        warns[chat_id] = {}
-    if user_id not in warns[chat_id]:
-        warns[chat_id][user_id] = []
-    warns[chat_id][user_id].append({
-        "time": time.time(),
-        "issuer": issuer_id,
-        "reason": reason
-    })
-    save_warns()
-    if len(warns[chat_id][user_id]) >= 3:
-        if kick_user(chat_id, user_id)[0]:
-            send_message(chat_id, f"{get_user_link(user_id)} исключён за 3 предупреждения.")
-            clear_warns(chat_id, user_id)
-
-def clear_warns(chat_id, user_id):
-    if chat_id in warns and user_id in warns[chat_id]:
-        del warns[chat_id][user_id]
-        if not warns[chat_id]:
-            del warns[chat_id]
-        save_warns()
-        return True
-    return False
-
-def get_warns(chat_id, user_id):
-    return warns.get(chat_id, {}).get(user_id, [])
-
-def get_all_warned_users(chat_id):
-    return list(warns.get(chat_id, {}).keys())
-
 def set_nick(chat_id, user_id, nick):
     if chat_id not in nicknames:
         nicknames[chat_id] = {}
@@ -1446,12 +1400,7 @@ def get_help_text_and_keyboard(chat_id, from_id):
                   "/getban — информация о банах пользователя",
                   "/kick — исключить пользователя из беседы",
                   "/mute — замьютить пользователя",
-                  "/unmute — размьютить пользователя",
-                  "/getwarn — информация о активных предупреждениях",
-                  "/warn — выдать предупреждение",
-                  "/unwarn — снять предупреждение",
-                  "/warnhistory — история предупреждений",
-                  "/warnlist — список пользователей с варном"]
+                  "/unmute — размьютить пользователя"]
     
     if role_level >= 2:
         lines += ["",
@@ -1508,7 +1457,6 @@ def get_help_text_and_keyboard(chat_id, from_id):
                   "/addzsa — выдать права зам. спец. администратора",
                   "/server — привязать беседу к серверу",
                   "/settings — показать настройки беседы",
-                  "/clearwarn — снять варны пользователям, отсутствующим в чате",
                   "/title — изменить название беседы",
                   "/srroleall — очистить все роли во всех беседах сервера",
                   "/srnickall — очистить все ники во всех беседах сервера",
@@ -1551,7 +1499,6 @@ def get_help_text_and_keyboard(chat_id, from_id):
     return "\n".join(lines), keyboard
 
 def send_help(chat_id, from_id):
-    """Отправляет справку, при необходимости разбивая её на части (лимит VK 4096)."""
     help_text, help_keyboard = get_help_text_and_keyboard(chat_id, from_id)
     MAX_LEN = 4000
     if len(help_text) <= MAX_LEN:
@@ -1756,8 +1703,6 @@ def handle_message(event):
 
         total_bans = len([cid for cid, users in banned_users.items() if target_id in users])
         global_ban = "Да" if total_bans > 0 else "Нет"
-        user_warns = get_warns(chat_id, target_id)
-        active_warns = len(user_warns)
         chat_ban = "Да" if (chat_id in banned_users and target_id in banned_users[chat_id]) else "Нет"
         nick = get_nick(chat_id, target_id) or "Нет"
 
@@ -1776,7 +1721,6 @@ def handle_message(event):
             f"Блокировок: {total_bans}",
             f"Общая блокировка в чатах: {global_ban}",
             "Общая блокировка в беседах игроков: Нет",
-            f"Активные предупреждения: {active_warns}",
             f"Блокировка чата: {chat_ban}",
             f"Ник: {nick}",
             f"Всего сообщений: {count}",
@@ -1813,10 +1757,6 @@ def handle_message(event):
             "/kick — кик\n"
             "/mute — мут, заткнуть\n"
             "/unmute — размут, разоткнуть\n"
-            "/warn — пред, варн\n"
-            "/unwarn — снятьпред, разварн\n"
-            "/warnhistory — историяварнов\n"
-            "/warnlist — варнлист\n"
             "/addmoder — mod, модер, модератор\n"
             "/ban — бан\n"
             "/banlist — банлист, списокбана\n"
@@ -2198,88 +2138,6 @@ def handle_message(event):
             send_message(chat_id, "Пользователь не в муте.")
         elif status == "no_rights":
             send_message(chat_id, "Вы не можете снять этот мут из-за иерархии ролей.")
-        return
-
-    elif command == '/getwarn':
-        if not has_moderation_rights(chat_id, from_id):
-            send_message(chat_id, "Недостаточно прав.")
-            return
-        if not target_id:
-            send_message(chat_id, "Укажите пользователя.")
-            return
-        user_warns = get_warns(chat_id, target_id)
-        if not user_warns:
-            send_message(chat_id, f"У {get_user_link(target_id)} нет предупреждений.")
-            return
-        lines = [f"Активные предупреждения {get_user_link(target_id)}:"]
-        for i, w in enumerate(user_warns, 1):
-            issuer = get_user_link(w['issuer'])
-            reason = w['reason'] or "не указана"
-            t = datetime.datetime.fromtimestamp(w['time'], tz=datetime.timezone(datetime.timedelta(hours=3)))
-            lines.append(f"{i}. {reason} (от {issuer}, {t.strftime('%d.%m.%Y %H:%M')})")
-        send_message(chat_id, "\n".join(lines))
-        return
-
-    elif command in ('/warn', '/пред', '/варн'):
-        if not has_moderation_rights(chat_id, from_id):
-            send_message(chat_id, "Недостаточно прав.")
-            return
-        if not target_id:
-            send_message(chat_id, "Укажите пользователя.")
-            return
-        if not can_punish(chat_id, from_id, target_id):
-            send_message(chat_id, "Вы не можете выдать предупреждение этому пользователю из-за иерархии ролей.")
-            return
-        reason = ' '.join(parts[args_start:]) if args_start < len(parts) else "не указана"
-        add_warn(chat_id, target_id, from_id, reason)
-        send_message(chat_id, f"{get_user_link(target_id)} получил предупреждение. Причина: {reason}")
-        return
-
-    elif command in ('/unwarn', '/снятьпред', '/разварн'):
-        if not has_moderation_rights(chat_id, from_id):
-            send_message(chat_id, "Недостаточно прав.")
-            return
-        if not target_id:
-            send_message(chat_id, "Укажите пользователя.")
-            return
-        if clear_warns(chat_id, target_id):
-            send_message(chat_id, f"Предупреждения с {get_user_link(target_id)} сняты.")
-        else:
-            send_message(chat_id, "У пользователя нет предупреждений.")
-        return
-
-    elif command in ('/warnhistory', '/историяварнов'):
-        if not has_moderation_rights(chat_id, from_id):
-            send_message(chat_id, "Недостаточно прав.")
-            return
-        if not target_id:
-            send_message(chat_id, "Укажите пользователя.")
-            return
-        user_warns = get_warns(chat_id, target_id)
-        if not user_warns:
-            send_message(chat_id, "История предупреждений пуста.")
-            return
-        lines = [f"История предупреждений {get_user_link(target_id)}:"]
-        for i, w in enumerate(user_warns, 1):
-            issuer = get_user_link(w['issuer'])
-            reason = w['reason'] or "не указана"
-            t = datetime.datetime.fromtimestamp(w['time'], tz=datetime.timezone(datetime.timedelta(hours=3)))
-            lines.append(f"{i}. {reason} (от {issuer}, {t.strftime('%d.%m.%Y %H:%M')})")
-        send_message(chat_id, "\n".join(lines))
-        return
-
-    elif command in ('/warnlist', '/варнлист'):
-        if not has_moderation_rights(chat_id, from_id):
-            send_message(chat_id, "Недостаточно прав.")
-            return
-        warned_users = get_all_warned_users(chat_id)
-        if not warned_users:
-            send_message(chat_id, "Нет пользователей с предупреждениями.")
-            return
-        lines = ["Пользователи с варнами:"]
-        for uid in warned_users:
-            lines.append(f"- {get_user_link(uid)} ({len(get_warns(chat_id, uid))} шт.)")
-        send_message(chat_id, "\n".join(lines))
         return
 
     if command in ('/addmoder', '/mod', '/модер', '/модератор'):
@@ -3139,27 +2997,6 @@ def handle_message(event):
             state_antiflood = "Вкл" if antiflood_settings.get(chat_id, {}).get("enabled") else "Выкл"
             state_invite = "Только модераторы" if invite_settings.get(chat_id, {}).get("only_mods") else "Все"
             send_message(chat_id, f"Настройки беседы:\nРежим тишины: {state_quiet}\nПривязка к серверу: {state_server}\nГлобальная синхронизация: {state_sync}\nАнтиспам: {state_antiflood}\nПриглашения: {state_invite}")
-            return
-
-        elif command == '/clearwarn':
-            try:
-                members = vk.messages.getConversationMembers(peer_id=peer_id)
-                current_members = [m['member_id'] for m in members['items'] if m['member_id'] > 0]
-            except:
-                send_message(chat_id, "Не удалось получить список участников.")
-                return
-            if chat_id not in warns:
-                send_message(chat_id, "Нет предупреждений.")
-                return
-            removed = 0
-            for uid in list(warns[chat_id].keys()):
-                if uid not in current_members:
-                    del warns[chat_id][uid]
-                    removed += 1
-            if not warns[chat_id]:
-                del warns[chat_id]
-            save_warns()
-            send_message(chat_id, f"Сняты предупреждения у {removed} отсутствующих пользователей.")
             return
 
         elif command == '/title':
@@ -4080,10 +3917,6 @@ def process_callback(event):
             "/kick — кик\n"
             "/mute — мут, заткнуть\n"
             "/unmute — размут, разоткнуть\n"
-            "/warn — пред, варн\n"
-            "/unwarn — снятьпред, разварн\n"
-            "/warnhistory — историяварнов\n"
-            "/warnlist — варнлист\n"
             "/addmoder — mod, модер, модератор\n"
             "/ban — бан\n"
             "/banlist — банлист, списокбана\n"
@@ -4133,7 +3966,6 @@ def process_callback(event):
             )
         except Exception as e:
             print(f"Ошибка редактирования show_help: {e}")
-            # Если не влезло — удаляем и отправляем частями
             try:
                 vk.messages.delete(peer_id=peer_id, cmids=[conversation_message_id], delete_for_all=True)
             except:
