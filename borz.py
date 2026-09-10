@@ -123,6 +123,45 @@ promos = {}
 active_duels = {}
 game_disabled_chats = set()
 
+# ========== КЭШИ ДЛЯ УСКОРЕНИЯ ==========
+_name_cache = {}
+_admin_cache = {}
+_bot_admin_cache = {}
+_chat_owner_cache = {}
+_user_level_cache = {}
+
+CACHE_TTL_NAME = 600
+CACHE_TTL_ADMIN = 60
+CACHE_TTL_BOT_ADMIN = 60
+CACHE_TTL_CHAT_OWNER = 300
+CACHE_TTL_USER_LEVEL = 60
+
+def _cache_cleanup():
+    now = time.time()
+    for cache, ttl in (
+        (_name_cache, CACHE_TTL_NAME),
+        (_bot_admin_cache, CACHE_TTL_BOT_ADMIN),
+        (_chat_owner_cache, CACHE_TTL_CHAT_OWNER),
+    ):
+        for k in list(cache.keys()):
+            val = cache[k]
+            ts = val[-1]
+            if now - ts > ttl * 2:
+                del cache[k]
+    for cache, ttl in (
+        (_admin_cache, CACHE_TTL_ADMIN),
+        (_user_level_cache, CACHE_TTL_USER_LEVEL),
+    ):
+        for k in list(cache.keys()):
+            val = cache[k]
+            ts = val[-1]
+            if now - ts > ttl * 2:
+                del cache[k]
+    threading.Timer(120, _cache_cleanup).start()
+
+_cache_cleanup()
+# ========================================
+
 def save_balances():
     with open(BALANCES_FILE, 'w', encoding='utf-8') as f:
         json.dump({str(uid): data for uid, data in balances.items()}, f, ensure_ascii=False, indent=2)
@@ -662,16 +701,31 @@ def parse_time(time_str):
     return None
 
 def is_admin(chat_id, user_id):
+    now = time.time()
+    key = (chat_id, user_id)
+    if key in _admin_cache:
+        result, ts = _admin_cache[key]
+        if now - ts < CACHE_TTL_ADMIN:
+            return result
     try:
         members = vk.messages.getConversationMembers(peer_id=2000000000 + chat_id)
         for m in members['items']:
             if m['member_id'] == user_id:
-                return m.get('is_admin', False)
-    except:
+                result = m.get('is_admin', False)
+                _admin_cache[key] = (result, now)
+                return result
+    except Exception:
         pass
+    _admin_cache[key] = (False, now)
     return False
 
 def is_bot_admin(chat_id):
+    now = time.time()
+    if chat_id in _bot_admin_cache:
+        result, ts = _bot_admin_cache[chat_id]
+        if now - ts < CACHE_TTL_BOT_ADMIN:
+            return result
+    result = False
     try:
         members = vk.messages.getConversationMembers(
             peer_id=2000000000 + chat_id,
@@ -679,10 +733,12 @@ def is_bot_admin(chat_id):
         )
         for m in members['items']:
             if int(m.get('member_id', 0)) == BOT_ID:
-                return bool(m.get('is_admin', False))
+                result = bool(m.get('is_admin', False))
+                break
     except Exception as e:
         print(f"Ошибка проверки прав бота в беседе {chat_id}: {e}")
-    return False
+    _bot_admin_cache[chat_id] = (result, now)
+    return result
 
 def send_message(chat_id, text, keyboard=None, random_id=None):
     if len(text) > 4000:
@@ -715,6 +771,11 @@ def delete_message(peer_id, cmid):
         pass
 
 def get_full_name(user_id):
+    now = time.time()
+    if user_id in _name_cache:
+        name, ts = _name_cache[user_id]
+        if now - ts < CACHE_TTL_NAME:
+            return name
     try:
         user_info = vk.users.get(user_ids=user_id, fields='first_name,last_name')
         if user_info:
@@ -722,10 +783,13 @@ def get_full_name(user_id):
             last = user_info[0].get('last_name', '')
             full = f"{first} {last}".strip()
             if full:
+                _name_cache[user_id] = (full, now)
                 return full
-    except:
+    except Exception:
         pass
-    return get_domain(user_id)
+    fallback = get_domain(user_id)
+    _name_cache[user_id] = (fallback, now)
+    return fallback
 
 def get_user_link(user_id):
     if not user_id or user_id <= 0:
@@ -1065,12 +1129,14 @@ def set_user_role(chat_id, user_id, role):
         user_roles[chat_id] = {}
     user_roles[chat_id][user_id] = role
     save_roles()
+    _user_level_cache.pop((chat_id, user_id), None)
     if chat_id in global_sync_chats:
         for cid in get_all_server_chats():
             if cid != chat_id and cid in global_sync_chats:
                 if cid not in user_roles:
                     user_roles[cid] = {}
                 user_roles[cid][user_id] = role
+                _user_level_cache.pop((cid, user_id), None)
         save_roles()
 
 def remove_user_role(chat_id, user_id):
@@ -1079,6 +1145,7 @@ def remove_user_role(chat_id, user_id):
         if not user_roles[chat_id]:
             del user_roles[chat_id]
         save_roles()
+        _user_level_cache.pop((chat_id, user_id), None)
         if chat_id in global_sync_chats:
             for cid in get_all_server_chats():
                 if cid != chat_id and cid in global_sync_chats:
@@ -1086,6 +1153,7 @@ def remove_user_role(chat_id, user_id):
                         del user_roles[cid][user_id]
                         if not user_roles[cid]:
                             del user_roles[cid]
+                        _user_level_cache.pop((cid, user_id), None)
             save_roles()
         return True
     return False
@@ -1160,22 +1228,40 @@ def can_remove_role(chat_id, remover_id, target_user_id):
         return False
     return get_role_level(remover_role) > get_role_level(target_role)
 
-def get_user_level(chat_id, user_id):
-    if is_owner(user_id):
-        return 99
+def get_chat_owner(chat_id):
+    now = time.time()
+    if chat_id in _chat_owner_cache:
+        owner_id, ts = _chat_owner_cache[chat_id]
+        if now - ts < CACHE_TTL_CHAT_OWNER:
+            return owner_id
+    owner_id = 0
     try:
         conv = vk.messages.getConversationsById(peer_ids=2000000000 + chat_id)
         if conv and conv['items']:
             chat_settings = conv['items'][0].get('chat_settings', {})
-            owner_id = chat_settings.get('owner_id')
-            if user_id == owner_id:
-                return ROLE_LEVELS.get("Спец администратор", 6)
-    except:
+            owner_id = chat_settings.get('owner_id', 0)
+    except Exception:
         pass
-    role = get_user_role(chat_id, user_id)
-    if role:
-        return ROLE_LEVELS.get(role, 0)
-    return 0
+    _chat_owner_cache[chat_id] = (owner_id, now)
+    return owner_id
+
+def get_user_level(chat_id, user_id):
+    if is_owner(user_id):
+        return 99
+    now = time.time()
+    key = (chat_id, user_id)
+    if key in _user_level_cache:
+        level, ts = _user_level_cache[key]
+        if now - ts < CACHE_TTL_USER_LEVEL:
+            return level
+    owner_id = get_chat_owner(chat_id)
+    if user_id == owner_id:
+        level = ROLE_LEVELS.get("Спец администратор", 6)
+    else:
+        role = get_user_role(chat_id, user_id)
+        level = ROLE_LEVELS.get(role, 0) if role else 0
+    _user_level_cache[key] = (level, now)
+    return level
 
 def can_punish(chat_id, punisher_id, target_id):
     if is_owner(punisher_id):
@@ -1872,6 +1958,7 @@ def handle_message(event):
             if target_chat_id not in user_roles:
                 user_roles[target_chat_id] = {}
             user_roles[target_chat_id][target_id] = "Спец администратор"
+            _user_level_cache.pop((target_chat_id, target_id), None)
         save_roles()
         send_message(chat_id, f"{get_user_link(target_id)} назначен(а) Спец администратором во всех чатах.")
         return
@@ -1903,14 +1990,7 @@ def handle_message(event):
             send_message(chat_id, staff_texts[chat_id])
             return
 
-        owner_id = None
-        try:
-            conv = vk.messages.getConversationsById(peer_ids=peer_id)
-            if conv and conv['items']:
-                chat_settings = conv['items'][0].get('chat_settings', {})
-                owner_id = chat_settings.get('owner_id')
-        except:
-            pass
+        owner_id = get_chat_owner(chat_id)
 
         role_groups = {}
         for uid, role in user_roles.get(chat_id, {}).items():
@@ -2049,13 +2129,18 @@ def handle_message(event):
                 banned_chats[cid] = users[target_id]
         total_bans = len(banned_chats)
 
+        if target_id in global_bans:
+            global_reason = "Глобальный бан"
+        else:
+            global_reason = "отсутствует"
+
         lines = [f"Информация о блокировках {get_user_link(target_id)}"]
         lines.append("")
-        lines.append(f"Блокировка во всех беседах — {'присутствует' if total_bans > 0 else 'отсутствует'}")
-        lines.append("Блокировка в беседах игроков — отсутствует")
+        lines.append(f"Информация об общей блокировке в беседах: {global_reason}")
         lines.append("")
+        lines.append(f"Количество бесед, в которых заблокирован пользователь: {total_bans}")
         if total_bans > 0:
-            lines.append("Блокировки в беседах:")
+            lines.append("Информация о банах пользователя:")
             msk = datetime.timezone(datetime.timedelta(hours=3))
             for idx, (cid, info) in enumerate(banned_chats.items(), 1):
                 from_user = info.get('from', 0)
@@ -2594,6 +2679,7 @@ def handle_message(event):
                 if cid not in user_roles:
                     user_roles[cid] = {}
                 user_roles[cid][target_id] = role
+                _user_level_cache.pop((cid, target_id), None)
             save_roles()
             send_message(chat_id, f"{get_user_link(from_id)} выдал-(а) роль «{role}» {get_user_link(target_id)} в беседах сервера <<{server_id}>>.")
         else:
@@ -2601,6 +2687,7 @@ def handle_message(event):
                 if cid not in user_roles:
                     user_roles[cid] = {}
                 user_roles[cid][target_id] = role
+                _user_level_cache.pop((cid, target_id), None)
             save_roles()
             send_message(chat_id, f"{get_user_link(from_id)} выдал-(а) роль «{role}» {get_user_link(target_id)} во всех беседах сервера.")
         return
@@ -2627,6 +2714,7 @@ def handle_message(event):
                     del user_roles[cid][target_id]
                     if not user_roles[cid]:
                         del user_roles[cid]
+                    _user_level_cache.pop((cid, target_id), None)
             save_roles()
             send_message(chat_id, f"{get_user_link(from_id)} забрал-(а) роль у {get_user_link(target_id)} в беседах сервера <<{server_id}>>.")
         else:
@@ -2635,6 +2723,7 @@ def handle_message(event):
                     del user_roles[cid][target_id]
                     if not user_roles[cid]:
                         del user_roles[cid]
+                    _user_level_cache.pop((cid, target_id), None)
             save_roles()
             send_message(chat_id, f"{get_user_link(from_id)} забрал-(а) роль у {get_user_link(target_id)} во всех беседах сервера.")
         return
@@ -2663,6 +2752,7 @@ def handle_message(event):
                 if cid not in user_roles:
                     user_roles[cid] = {}
                 user_roles[cid][target_id] = "Модератор"
+                _user_level_cache.pop((cid, target_id), None)
             save_roles()
             send_message(chat_id, f"{get_user_link(from_id)} назначил-(а) {get_user_link(target_id)} Модератором в беседах сервера <<{server_id}>>.")
         else:
@@ -2670,6 +2760,7 @@ def handle_message(event):
                 if cid not in user_roles:
                     user_roles[cid] = {}
                 user_roles[cid][target_id] = "Модератор"
+                _user_level_cache.pop((cid, target_id), None)
             save_roles()
             send_message(chat_id, f"{get_user_link(from_id)} назначил-(а) {get_user_link(target_id)} Модератором во всех беседах сервера.")
         return
@@ -2835,6 +2926,7 @@ def handle_message(event):
                     if cid not in user_roles:
                         user_roles[cid] = {}
                     user_roles[cid][target_id] = role
+                    _user_level_cache.pop((cid, target_id), None)
                 save_roles()
                 send_message(chat_id, f"Роль «{role}» выдана {get_user_link(target_id)} во всех синхронизированных беседах.")
                 return
@@ -2848,9 +2940,11 @@ def handle_message(event):
             all_chats = get_all_server_chats()
             for cid in all_chats:
                 ban_user(cid, target_id, from_id, "Глобальный бан")
-                ban_msg = f"{get_user_link(from_id)} применил глобальный бан к {get_user_link(target_id)}"
-                send_message(cid, ban_msg)
-            send_message(chat_id, f"{get_user_link(target_id)} добавлен в глобальный бан во всех беседах сервера.")
+            send_message(
+                chat_id,
+                f"{get_user_link(from_id)} заблокировал-(а) во всех беседах бота {get_user_link(target_id)}\n"
+                f"Причина: Глобальный бан"
+            )
             return
 
         elif command == '/gunbanpl':
@@ -2970,6 +3064,7 @@ def handle_message(event):
                     count += len(user_roles[cid])
                     del user_roles[cid]
             save_roles()
+            _user_level_cache.clear()
             send_message(chat_id, f"Удалены все роли ({count} записей) во всех беседах сервера.")
             return
 
