@@ -3624,48 +3624,17 @@ def handle_message(event):
         return
 
     if command == '/duel' or command == '/дуэль':
-        opponent = None
-        amount = None
-
-        # Вариант 1: ответ на сообщение
-        if msg.get('fwd_messages') or msg.get('reply_message'):
-            opponent = target_id
-            if len(parts) < 2:
-                send_message(chat_id, "Использование: /дуэль <сумма> (в ответ на сообщение)")
-                return
-            try:
-                amount = int(parts[1])
-            except (ValueError, TypeError):
-                send_message(chat_id, "Сумма должна быть числом.")
-                return
-        # Вариант 2: /duel @user 200
-        elif len(parts) >= 2 and extract_user_from_arg(parts[1]):
-            opponent = extract_user_from_arg(parts[1])
-            if len(parts) < 3:
-                send_message(chat_id, "Использование: /дуэль @user <сумма>")
-                return
-            try:
-                amount = int(parts[2])
-            except (ValueError, TypeError):
-                send_message(chat_id, "Сумма должна быть числом.")
-                return
-        # Вариант 3: /duel 200 — открытая дуэль
-        else:
-            if len(parts) < 2:
-                send_message(chat_id, "Использование: /дуэль <сумма>\nПример: /дуэль 200 — любой желающий сможет принять вызов.")
-                return
-            try:
-                amount = int(parts[1])
-            except (ValueError, TypeError):
-                send_message(chat_id, "Сумма должна быть числом.")
-                return
+        if len(parts) < 2:
+            send_message(chat_id, "Использование: /дуэль <сумма>\nПример: /дуэль 200")
+            return
+        try:
+            amount = int(parts[1])
+        except (ValueError, TypeError):
+            send_message(chat_id, "Сумма должна быть числом.")
+            return
 
         if amount <= 0:
             send_message(chat_id, "Сумма должна быть положительной.")
-            return
-
-        if opponent == from_id:
-            send_message(chat_id, "Нельзя вызвать самого себя.")
             return
 
         challenger_data = balances.get(from_id)
@@ -3673,17 +3642,10 @@ def handle_message(event):
             return
 
         duel_id = get_random_id()
-
-        if opponent:
-            duel_text = (
-                f"⚔️ {get_user_link(from_id)} предложил дуэль на {amount:,}$ против {get_user_link(opponent)}\n"
-                f"Любой желающий может принять вызов."
-            )
-        else:
-            duel_text = (
-                f"⚔️ {get_user_link(from_id)} предложил дуэль на {amount:,}$\n"
-                f"Любой желающий может принять вызов."
-            )
+        duel_text = (
+            f"⚔️ {get_user_link(from_id)} предложил дуэль на {amount:,}$\n"
+            f"Любой желающий может принять вызов."
+        )
 
         keyboard = get_duel_keyboard(duel_id)
         try:
