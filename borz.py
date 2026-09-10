@@ -159,16 +159,14 @@ def format_time_left(seconds):
     minutes = seconds // 60
     return f"{days}д {hours}ч {minutes}м"
 
-def get_duel_keyboard(challenger_id, opponent_id, amount, chat_id):
+def get_duel_keyboard(duel_id):
     buttons = [[
         {
             "action": {
                 "type": "callback",
                 "payload": json.dumps({
                     "cmd": "duel_accept",
-                    "challenger": challenger_id,
-                    "amount": amount,
-                    "chat_id": chat_id
+                    "duel_id": duel_id
                 }),
                 "label": "Принять"
             },
@@ -179,10 +177,7 @@ def get_duel_keyboard(challenger_id, opponent_id, amount, chat_id):
                 "type": "callback",
                 "payload": json.dumps({
                     "cmd": "duel_reject",
-                    "challenger": challenger_id,
-                    "opponent": opponent_id,
-                    "amount": amount,
-                    "chat_id": chat_id
+                    "duel_id": duel_id
                 }),
                 "label": "Отклонить"
             },
@@ -1416,7 +1411,7 @@ def get_help_text_and_keyboard(chat_id, from_id):
              "/buyvip — купить VIP статус",
              "/transfer (/передать) @user <сумма> — перевести деньги",
              "/top (/топ) — топ богатых пользователей",
-             "/duel (/дуэль) @user <сумма> — вызвать на дуэль"]
+             "/duel (/дуэль) <сумма> — открытая дуэль (любой может принять)"]
 
     if role_level >= 1:
         lines += ["",
@@ -3629,57 +3624,83 @@ def handle_message(event):
         return
 
     if command == '/duel' or command == '/дуэль':
+        opponent = None
+        amount = None
+
+        # Вариант 1: ответ на сообщение
         if msg.get('fwd_messages') or msg.get('reply_message'):
             opponent = target_id
-            amount_index = 1
-        else:
-            if len(parts) < 3:
-                send_message(chat_id, "Использование: /дуэль @user <сумма>\nЛибо ответьте на сообщение: /дуэль <сумма>")
+            if len(parts) < 2:
+                send_message(chat_id, "Использование: /дуэль <сумма> (в ответ на сообщение)")
                 return
+            try:
+                amount = int(parts[1])
+            except (ValueError, TypeError):
+                send_message(chat_id, "Сумма должна быть числом.")
+                return
+        # Вариант 2: /duel @user 200
+        elif len(parts) >= 2 and extract_user_from_arg(parts[1]):
             opponent = extract_user_from_arg(parts[1])
-            amount_index = 2
-        if not opponent:
-            send_message(chat_id, "Не удалось определить противника.")
+            if len(parts) < 3:
+                send_message(chat_id, "Использование: /дуэль @user <сумма>")
+                return
+            try:
+                amount = int(parts[2])
+            except (ValueError, TypeError):
+                send_message(chat_id, "Сумма должна быть числом.")
+                return
+        # Вариант 3: /duel 200 — открытая дуэль
+        else:
+            if len(parts) < 2:
+                send_message(chat_id, "Использование: /дуэль <сумма>\nПример: /дуэль 200 — любой желающий сможет принять вызов.")
+                return
+            try:
+                amount = int(parts[1])
+            except (ValueError, TypeError):
+                send_message(chat_id, "Сумма должна быть числом.")
+                return
+
+        if amount <= 0:
+            send_message(chat_id, "Сумма должна быть положительной.")
             return
+
         if opponent == from_id:
             send_message(chat_id, "Нельзя вызвать самого себя.")
-            return
-        if amount_index >= len(parts):
-            send_message(chat_id, "Укажите сумму.")
-            return
-        try:
-            amount = int(parts[amount_index])
-            if amount <= 0:
-                send_message(chat_id, "Сумма должна быть положительной.")
-                return
-        except (ValueError, TypeError):
-            send_message(chat_id, "Сумма должна быть числом.")
             return
 
         challenger_data = balances.get(from_id)
         if not challenger_data or challenger_data["balance"] < amount:
-            # Просто молча выходим — в чат ничего не пишем
             return
 
-        duel_text = f"⚔️ {get_user_link(from_id)} предложил сразиться в дуэли на {amount:,}$\nЛюбой желающий может принять вызов."
-        keyboard = get_duel_keyboard(from_id, opponent, amount, chat_id)
+        duel_id = get_random_id()
+
+        if opponent:
+            duel_text = (
+                f"⚔️ {get_user_link(from_id)} предложил дуэль на {amount:,}$ против {get_user_link(opponent)}\n"
+                f"Любой желающий может принять вызов."
+            )
+        else:
+            duel_text = (
+                f"⚔️ {get_user_link(from_id)} предложил дуэль на {amount:,}$\n"
+                f"Любой желающий может принять вызов."
+            )
+
+        keyboard = get_duel_keyboard(duel_id)
         try:
-            result = vk.messages.send(
+            vk.messages.send(
                 peer_id=peer_id,
                 message=duel_text,
-                random_id=get_random_id(),
+                random_id=duel_id,
                 keyboard=keyboard
             )
-            message_id = result['conversation_message_id']
             if chat_id not in active_duels:
                 active_duels[chat_id] = {}
-            active_duels[chat_id][message_id] = {
+            active_duels[chat_id][duel_id] = {
                 "challenger": from_id,
-                "opponent": opponent,
                 "amount": amount
             }
         except Exception as e:
-            send_message(chat_id, f"Ошибка отправки дуэли: {e}")
+            print(f"Ошибка отправки дуэли: {e}")
         return
 
 def handle_invite(event):
@@ -3978,10 +3999,25 @@ def process_callback(event):
             pass
 
     elif cmd == 'duel_accept':
-        challenger = payload.get('challenger')
-        amount = payload.get('amount')
-        chat_id_payload = payload.get('chat_id')
+        duel_id = payload.get('duel_id')
+        if not duel_id:
+            return
 
+        if chat_id not in active_duels or duel_id not in active_duels[chat_id]:
+            try:
+                vk.messages.sendMessageEventAnswer(
+                    event_id=event_id,
+                    user_id=user_id,
+                    peer_id=peer_id,
+                    event_data=json.dumps({"type": "show_snackbar", "text": "Дуэль уже неактивна."})
+                )
+            except:
+                pass
+            return
+
+        duel = active_duels[chat_id][duel_id]
+        challenger = duel["challenger"]
+        amount = duel["amount"]
         opponent = user_id
 
         if opponent == challenger:
@@ -3991,18 +4027,6 @@ def process_callback(event):
                     user_id=user_id,
                     peer_id=peer_id,
                     event_data=json.dumps({"type": "show_snackbar", "text": "Нельзя принять свою же дуэль."})
-                )
-            except:
-                pass
-            return
-
-        if chat_id not in active_duels or conversation_message_id not in active_duels[chat_id]:
-            try:
-                vk.messages.sendMessageEventAnswer(
-                    event_id=event_id,
-                    user_id=user_id,
-                    peer_id=peer_id,
-                    event_data=json.dumps({"type": "show_snackbar", "text": "Дуэль уже неактивна."})
                 )
             except:
                 pass
@@ -4041,8 +4065,7 @@ def process_callback(event):
                 )
             except:
                 pass
-            if conversation_message_id in active_duels.get(chat_id, {}):
-                del active_duels[chat_id][conversation_message_id]
+            del active_duels[chat_id][duel_id]
             return
 
         winner = random.choice([challenger, opponent])
@@ -4063,24 +4086,30 @@ def process_callback(event):
             vk.messages.delete(peer_id=peer_id, cmids=[conversation_message_id], delete_for_all=True)
         except:
             pass
-        if conversation_message_id in active_duels.get(chat_id, {}):
-            del active_duels[chat_id][conversation_message_id]
+        if duel_id in active_duels.get(chat_id, {}):
+            del active_duels[chat_id][duel_id]
 
         result_text = f"⚔️ Дуэль завершена!\n🏆 Победитель: {get_user_link(winner)}\n💸 Выигрыш: {amount*2:,}$"
         send_message(chat_id, result_text)
 
     elif cmd == 'duel_reject':
-        challenger = payload.get('challenger')
-        opponent = payload.get('opponent')
-        amount = payload.get('amount')
-        chat_id_payload = payload.get('chat_id')
-        if user_id != opponent and user_id != challenger:
+        duel_id = payload.get('duel_id')
+        if not duel_id:
+            return
+
+        if chat_id not in active_duels or duel_id not in active_duels[chat_id]:
+            return
+
+        duel = active_duels[chat_id][duel_id]
+        challenger = duel["challenger"]
+
+        if user_id != challenger:
             try:
                 vk.messages.sendMessageEventAnswer(
                     event_id=event_id,
                     user_id=user_id,
                     peer_id=peer_id,
-                    event_data=json.dumps({"type": "show_snackbar", "text": "Вы не участник этой дуэли."})
+                    event_data=json.dumps({"type": "show_snackbar", "text": "Только автор может отменить дуэль."})
                 )
             except:
                 pass
@@ -4090,13 +4119,9 @@ def process_callback(event):
             vk.messages.delete(peer_id=peer_id, cmids=[conversation_message_id], delete_for_all=True)
         except:
             pass
-        if chat_id in active_duels and conversation_message_id in active_duels[chat_id]:
-            del active_duels[chat_id][conversation_message_id]
+        del active_duels[chat_id][duel_id]
 
-        if user_id == challenger:
-            send_message(chat_id, f"❌ {get_user_link(challenger)} отменил-(а) свою дуэль.")
-        else:
-            send_message(chat_id, f"❌ {get_user_link(opponent)} отклонил-(а) дуэль с {get_user_link(challenger)}.")
+        send_message(chat_id, f"❌ {get_user_link(challenger)} отменил-(а) свою дуэль.")
 
 def main():
     print("Bot started!")
