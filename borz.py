@@ -13,7 +13,7 @@ import sys
 import sqlite3
 
 # ================= НАСТРОЙКИ =================
-TOKEN = os.environ.get("VK_TOKEN", "").strip()
+TOKEN = os.environ.get("VK_TOKEN", "vk1.a.qTmbvDqtUaMY-v3WUAFCttrgbdC0pGgKRM97ls8g-INfMxhV9RW4jl_bzqoa5-evzCRVrEaFx4vI9dC9QHDvygT5f2OHaa8rrx77gqorzwt6H3TZ3shuFieOFrGds09ksldW8nXefrrmMy_kr9SW8zOl6OjdjfOPRyeA_clm7tcZbZM6Uc_BCR-leDG55phFCEoHRQhNl34oYCqT66b6HQ").strip()
 if not TOKEN:
     raise RuntimeError("Не задан VK_TOKEN. Установите переменную окружения VK_TOKEN.")
 GROUP_ID = 240091890
