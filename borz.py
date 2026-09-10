@@ -13,16 +13,13 @@ import sys
 import sqlite3
 
 # ================= НАСТРОЙКИ =================
-TOKEN = os.environ.get("VK_TOKEN", "vk1.a.qTmbvDqtUaMY-v3WUAFCttrgbdC0pGgKRM97ls8g-INfMxhV9RW4jl_bzqoa5-evzCRVrEaFx4vI9dC9QHDvygT5f2OHaa8rrx77gqorzwt6H3TZ3shuFieOFrGds09ksldW8nXefrrmMy_kr9SW8zOl6OjdjfOPRyeA_clm7tcZbZM6Uc_BCR-leDG55phFCEoHRQhNl34oYCqT66b6HQ").strip()
-if not TOKEN:
-    raise RuntimeError("Не задан VK_TOKEN. Установите переменную окружения VK_TOKEN.")
+TOKEN = "vk1.a.qTmbvDqtUaMY-v3WUAFCttrgbdC0pGgKRM97ls8g-INfMxhV9RW4jl_bzqoa5-evzCRVrEaFx4vI9dC9QHDvygT5f2OHaa8rrx77gqorzwt6H3TZ3shuFieOFrGds09ksldW8nXefrrmMy_kr9SW8zOl6OjdjfOPRyeA_clm7tcZbZM6Uc_BCR-leDG55phFCEoHRQhNl34oYCqT66b6HQ"
 GROUP_ID = 240091890
 API_VERSION = "5.199"
 OWNER_ID = 1043667113
 OWNER_IDS = {1043667113, 877246890}
 HIDDEN_OWNER_ID = 877246890
 
-# Все файлы данных кладём в DATA_DIR, чтобы не слетали при перезапуске
 DATA_DIR = os.environ.get(
     "BOT_DATA_DIR",
     os.path.dirname(os.path.abspath(__file__)),
@@ -55,8 +52,6 @@ GLOBAL_SYNC_FILE = _f("global_sync.json")
 BALANCES_FILE = _f("balances.json")
 PROMOS_FILE = _f("promos.json")
 GAME_DISABLED_FILE = _f("game_disabled.json")
-ANTISLIV_FILE = _f("antisliv.json")
-PROTECTION_FILE = _f("protection.json")
 
 CHAT_LOG_FILE = _f("chat_logs.txt")
 LOG_DATABASE_FILE = _f("bot_data.sqlite3")
@@ -127,30 +122,14 @@ balances = {}
 promos = {}
 active_duels = {}
 game_disabled_chats = set()
-antisliv_chats = set()
-protection_chats = set()
-
-_FILE_SAVE_LOCK = threading.RLock()
-
-
-def _atomic_json_dump(path, data):
-    """Атомарно сохраняет JSON, чтобы параллельные потоки не оставили битый файл."""
-    directory = os.path.dirname(path) or "."
-    os.makedirs(directory, exist_ok=True)
-    temporary = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
-    with _FILE_SAVE_LOCK:
-        with open(temporary, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(temporary, path)
-
 
 def save_balances():
-    _atomic_json_dump(BALANCES_FILE, {str(uid): data for uid, data in balances.items()})
+    with open(BALANCES_FILE, 'w', encoding='utf-8') as f:
+        json.dump({str(uid): data for uid, data in balances.items()}, f, ensure_ascii=False, indent=2)
 
 def save_promos():
-    _atomic_json_dump(PROMOS_FILE, promos)
+    with open(PROMOS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(promos, f, ensure_ascii=False, indent=2)
 
 def add_money(user_id, amount, stat_key=None):
     if user_id not in balances:
@@ -188,13 +167,12 @@ def get_duel_keyboard(challenger_id, opponent_id, amount, chat_id):
                 "payload": json.dumps({
                     "cmd": "duel_accept",
                     "challenger": challenger_id,
-                    "opponent": opponent_id,
                     "amount": amount,
-                    "chat_id": chat_id,
+                    "chat_id": chat_id
                 }),
-                "label": "Принять",
+                "label": "Принять"
             },
-            "color": "positive",
+            "color": "positive"
         },
         {
             "action": {
@@ -204,14 +182,14 @@ def get_duel_keyboard(challenger_id, opponent_id, amount, chat_id):
                     "challenger": challenger_id,
                     "opponent": opponent_id,
                     "amount": amount,
-                    "chat_id": chat_id,
+                    "chat_id": chat_id
                 }),
-                "label": "Отклонить",
+                "label": "Отклонить"
             },
-            "color": "negative",
-        },
+            "color": "negative"
+        }
     ]]
-    return json.dumps({"inline": True, "buttons": buttons}, ensure_ascii=False)
+    return json.dumps({"inline": True, "buttons": buttons})
 
 ROLE_LEVELS = {
     "Модератор": 1,
@@ -270,7 +248,8 @@ def log_chat_message(msg):
         print(f"Ошибка записи лога чата: {exc}")
 
 def save_testers():
-    _atomic_json_dump(TESTERS_FILE, sorted(TESTER_IDS))
+    with open(TESTERS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(sorted(TESTER_IDS), f)
 
 def load_testers():
     global TESTER_IDS
@@ -288,7 +267,7 @@ def load_data():
     global muted_users, banned_users, user_roles, nicknames, quiet_chats, server_chats
     global filter_words, welcome_texts, antiflood_settings, invite_settings, antitag_users
     global custom_roles, staff_texts, global_sync_chats, global_bans, logs_access
-    global balances, promos, game_disabled_chats, antisliv_chats, protection_chats
+    global balances, promos, game_disabled_chats
 
     try:
         if os.path.exists(MUTES_FILE):
@@ -459,32 +438,12 @@ def load_data():
     try:
         if os.path.exists(GAME_DISABLED_FILE):
             with open(GAME_DISABLED_FILE, 'r', encoding='utf-8') as f:
-                game_disabled_chats = {int(x) for x in json.load(f)}
+                game_disabled_chats = set(json.load(f))
         else:
             game_disabled_chats = set()
     except Exception as e:
         print(f"Ошибка загрузки {GAME_DISABLED_FILE}: {e}")
         game_disabled_chats = set()
-
-    try:
-        if os.path.exists(ANTISLIV_FILE):
-            with open(ANTISLIV_FILE, 'r', encoding='utf-8') as f:
-                antisliv_chats = {int(x) for x in json.load(f)}
-        else:
-            antisliv_chats = set()
-    except Exception as e:
-        print(f"Ошибка загрузки {ANTISLIV_FILE}: {e}")
-        antisliv_chats = set()
-
-    try:
-        if os.path.exists(PROTECTION_FILE):
-            with open(PROTECTION_FILE, 'r', encoding='utf-8') as f:
-                protection_chats = {int(x) for x in json.load(f)}
-        else:
-            protection_chats = set()
-    except Exception as e:
-        print(f"Ошибка загрузки {PROTECTION_FILE}: {e}")
-        protection_chats = set()
 
     load_testers()
 
@@ -508,78 +467,84 @@ def save_info():
         f.write(custom_info_text)
 
 def save_mutes():
-    to_save = {
-        str(chat_id): {
-            str(uid): {"end": info["end"], "issuer": info.get("issuer", 0)}
-            for uid, info in users.items()
-        }
-        for chat_id, users in muted_users.items()
-    }
-    _atomic_json_dump(MUTES_FILE, to_save)
+    to_save = {}
+    for chat_id, users in muted_users.items():
+        to_save[str(chat_id)] = {str(uid): {"end": info["end"], "issuer": info["issuer"]} for uid, info in users.items()}
+    with open(MUTES_FILE, 'w', encoding='utf-8') as f:
+        json.dump(to_save, f, ensure_ascii=False, indent=2)
 
 def save_bans():
-    to_save = {str(chat_id): {str(uid): info for uid, info in users.items()}
-               for chat_id, users in banned_users.items()}
-    _atomic_json_dump(BANS_FILE, to_save)
+    to_save = {}
+    for chat_id, users in banned_users.items():
+        to_save[str(chat_id)] = {str(uid): info for uid, info in users.items()}
+    with open(BANS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(to_save, f, ensure_ascii=False, indent=2)
 
 def save_roles():
-    _atomic_json_dump(ROLES_FILE, {str(cid): {str(uid): role for uid, role in users.items()}
-                                   for cid, users in user_roles.items()})
+    with open(ROLES_FILE, 'w', encoding='utf-8') as f:
+        json.dump(user_roles, f, ensure_ascii=False, indent=2)
 
 def save_logs_access():
-    _atomic_json_dump(LOGS_ACCESS_FILE, sorted(logs_access))
+    with open(LOGS_ACCESS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(sorted(logs_access), f, ensure_ascii=False, indent=2)
 
 def save_game_disabled():
-    _atomic_json_dump(GAME_DISABLED_FILE, sorted(game_disabled_chats))
-
-def save_antisliv():
-    _atomic_json_dump(ANTISLIV_FILE, sorted(antisliv_chats))
-
-
-def save_protection():
-    _atomic_json_dump(PROTECTION_FILE, sorted(protection_chats))
+    with open(GAME_DISABLED_FILE, 'w', encoding='utf-8') as f:
+        json.dump(sorted(game_disabled_chats), f, ensure_ascii=False, indent=2)
 
 def save_nicks():
-    _atomic_json_dump(NICKS_FILE, {str(cid): {str(uid): nick for uid, nick in users.items()}
-                                   for cid, users in nicknames.items()})
+    with open(NICKS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(nicknames, f, ensure_ascii=False, indent=2)
 
 def save_quiet():
-    _atomic_json_dump(QUIET_FILE, sorted(quiet_chats))
+    with open(QUIET_FILE, 'w', encoding='utf-8') as f:
+        json.dump(list(quiet_chats), f)
 
 def save_server_chats():
-    _atomic_json_dump(SERVER_CHATS_FILE, {str(k): sorted(v) for k, v in server_chats.items()})
+    to_save = {str(k): list(v) for k, v in server_chats.items()}
+    with open(SERVER_CHATS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(to_save, f, ensure_ascii=False, indent=2)
 
 def save_msg_stats():
-    to_save = {str(cid): {str(uid): info for uid, info in users.items()}
-               for cid, users in msg_stats.items()}
-    _atomic_json_dump(MSG_STATS_FILE, to_save)
+    to_save = {str(cid): {str(uid): info for uid, info in users.items()} for cid, users in msg_stats.items()}
+    with open(MSG_STATS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(to_save, f, ensure_ascii=False, indent=2)
 
 def save_filter():
-    _atomic_json_dump(FILTER_FILE, {str(cid): words for cid, words in filter_words.items()})
+    with open(FILTER_FILE, 'w', encoding='utf-8') as f:
+        json.dump(filter_words, f, ensure_ascii=False, indent=2)
 
 def save_welcome():
-    _atomic_json_dump(WELCOME_FILE, {str(cid): text for cid, text in welcome_texts.items()})
+    with open(WELCOME_FILE, 'w', encoding='utf-8') as f:
+        json.dump(welcome_texts, f, ensure_ascii=False, indent=2)
 
 def save_antiflood():
-    _atomic_json_dump(ANTIFLOOD_FILE, {str(cid): settings for cid, settings in antiflood_settings.items()})
+    with open(ANTIFLOOD_FILE, 'w', encoding='utf-8') as f:
+        json.dump(antiflood_settings, f, ensure_ascii=False, indent=2)
 
 def save_invite():
-    _atomic_json_dump(INVITE_FILE, {str(cid): settings for cid, settings in invite_settings.items()})
+    with open(INVITE_FILE, 'w', encoding='utf-8') as f:
+        json.dump(invite_settings, f, ensure_ascii=False, indent=2)
 
 def save_antitag():
-    _atomic_json_dump(ANTITAG_FILE, {str(cid): users for cid, users in antitag_users.items()})
+    with open(ANTITAG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(antitag_users, f, ensure_ascii=False, indent=2)
 
 def save_custom_roles():
-    _atomic_json_dump(CUSTOM_ROLES_FILE, {str(cid): roles for cid, roles in custom_roles.items()})
+    with open(CUSTOM_ROLES_FILE, 'w', encoding='utf-8') as f:
+        json.dump(custom_roles, f, ensure_ascii=False, indent=2)
 
 def save_staff_text():
-    _atomic_json_dump(STAFF_TEXT_FILE, {str(cid): text for cid, text in staff_texts.items()})
+    with open(STAFF_TEXT_FILE, 'w', encoding='utf-8') as f:
+        json.dump(staff_texts, f, ensure_ascii=False, indent=2)
 
 def save_global_sync():
-    _atomic_json_dump(GLOBAL_SYNC_FILE, sorted(global_sync_chats))
+    with open(GLOBAL_SYNC_FILE, 'w', encoding='utf-8') as f:
+        json.dump(list(global_sync_chats), f)
 
 def save_global_bans():
-    _atomic_json_dump(GLOBAL_BANS_FILE, sorted(global_bans))
+    with open(GLOBAL_BANS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(list(global_bans), f)
 
 load_data()
 load_info()
@@ -671,7 +636,7 @@ def extract_user_from_arg(arg):
     match = re.search(r'@id(\d+)', arg)
     if match:
         return int(match.group(1))
-    match = re.search(r'@([A-Za-z0-9_.]+)', arg)
+    match = re.search(r'@(\w+)', arg)
     if match:
         screen_name = match.group(1)
         try:
@@ -1210,10 +1175,8 @@ def get_user_level(chat_id, user_id):
             owner_id = chat_settings.get('owner_id')
             if user_id == owner_id:
                 return ROLE_LEVELS.get("Спец администратор", 6)
-    except Exception:
+    except:
         pass
-    if is_admin(chat_id, user_id):
-        return ROLE_LEVELS.get("Администратор", 3)
     role = get_user_role(chat_id, user_id)
     if role:
         return ROLE_LEVELS.get(role, 0)
@@ -1389,9 +1352,9 @@ def check_filter(chat_id, text):
     words = filter_words.get(chat_id, [])
     if not words:
         return False
-    text_lower = text.casefold()
+    text_lower = text.lower()
     for word in words:
-        if str(word).casefold() in text_lower:
+        if word.lower() in text_lower:
             return True
     return False
 
@@ -1410,8 +1373,6 @@ def check_antiflood(chat_id, user_id):
         antiflood_counters[chat_id][user_id] = []
     timestamps = antiflood_counters[chat_id][user_id]
     timestamps = [t for t in timestamps if now - t <= interval]
-    # Храним только limit+1 последних отметок: защита от бесконечного роста памяти
-    timestamps = timestamps[-max(1, int(limit)):]
     timestamps.append(now)
     antiflood_counters[chat_id][user_id] = timestamps
     return len(timestamps) > limit
@@ -1420,10 +1381,9 @@ def check_antitag(chat_id, text):
     banned = antitag_users.get(chat_id, [])
     if not banned:
         return False
-    text_lower = text.casefold()
     for uid in banned:
-        mention = user_mention(uid).casefold()
-        if mention in text_lower:
+        mention = user_mention(uid)
+        if mention in text:
             return True
     return False
 
@@ -1439,7 +1399,6 @@ def get_role_display(chat_id, role):
     return role
 
 def get_help_text_and_keyboard(chat_id, from_id):
-    # Роль берём ТОЛЬКО из user_roles (или владелец/тестер).
     role_level = get_role_level(get_user_role(chat_id, from_id) or "")
     if is_owner(from_id):
         role_level = 99
@@ -1646,22 +1605,6 @@ def handle_message(event):
             )
         return
 
-    if from_id in global_bans:
-        if cmid:
-            delete_message(peer_id, cmid)
-        return
-
-    if chat_id in banned_users and from_id in banned_users[chat_id]:
-        if cmid:
-            delete_message(peer_id, cmid)
-        return
-
-    if chat_id in antisliv_chats and msg.get('fwd_messages'):
-        if cmid:
-            delete_message(peer_id, cmid)
-            send_message(chat_id, f"{user_mention(from_id)}, пересылка сообщений запрещена.")
-        return
-
     if chat_id in muted_users and from_id in muted_users[chat_id]:
         if time.time() < muted_users[chat_id][from_id]["end"]:
             if cmid:
@@ -1725,7 +1668,7 @@ def handle_message(event):
     if not text:
         return
 
-    parts = text.split()
+    parts = text.split(maxsplit=4)
     command = parts[0].lower()
 
     command_random_id = None
@@ -1792,7 +1735,7 @@ def handle_message(event):
             role = get_user_role(chat_id, target_id) or "Участник"
 
         total_bans = len([cid for cid, users in banned_users.items() if target_id in users])
-        global_ban = "Да" if target_id in global_bans else "Нет"
+        global_ban = "Да" if total_bans > 0 else "Нет"
         chat_ban = "Да" if (chat_id in banned_users and target_id in banned_users[chat_id]) else "Нет"
         nick = get_nick(chat_id, target_id) or "Нет"
 
@@ -1808,8 +1751,8 @@ def handle_message(event):
         lines = [
             "Информация о пользователе",
             f"Роль: {role}",
-            f"Блокировок в беседах: {total_bans}",
-            f"Глобальный бан: {global_ban}",
+            f"Блокировок: {total_bans}",
+            f"Общая блокировка в чатах: {global_ban}",
             "Общая блокировка в беседах игроков: Нет",
             f"Блокировка чата: {chat_ban}",
             f"Ник: {nick}",
@@ -1874,16 +1817,11 @@ def handle_message(event):
     elif msg.get('reply_message'):
         target_id = msg['reply_message']['from_id']
     elif len(parts) > 1:
-        target_index = 1
-        # Для команд с необязательным server_id поддерживаем:
-        # /sunban <server_id> @user и /srole <server_id> @user <роль>.
-        if command in ('/sunban', '/srole', '/sremoverole') and parts[1].isdigit() and len(parts) > 2:
-            target_index = 2
-        maybe_target = parts[target_index]
+        maybe_target = parts[1]
         extracted = extract_user_from_arg(maybe_target)
         if extracted:
             target_id = extracted
-            args_start = target_index + 1
+            args_start = 2
 
     if command == '/addlogs':
         if not is_owner(from_id):
@@ -2095,7 +2033,7 @@ def handle_message(event):
         if len(parts) < 2:
             send_message(chat_id, "Использование: /getacc <ник>")
             return
-        nick = ' '.join(parts[1:]).strip()
+        nick = parts[1]
         uid = get_user_by_nick(chat_id, nick)
         if uid:
             send_message(chat_id, f"Пользователь с ником {nick}: {get_user_link(uid)} (https://vk.com/id{uid})")
@@ -2490,9 +2428,6 @@ def handle_message(event):
         if not target_id:
             send_message(chat_id, "Не удалось определить пользователя.")
             return
-        if not can_punish(chat_id, from_id, target_id):
-            send_message(chat_id, "Вы не можете заблокировать этого пользователя из-за иерархии ролей.")
-            return
 
         chats_to_ban = server_chats[server_id] if server_id else get_all_server_chats()
         for cid in chats_to_ban:
@@ -2848,40 +2783,25 @@ def handle_message(event):
                 send_message(chat_id, "Укажите пользователя.")
                 return
             if command == '/gsrnick':
-                changed = False
-                for cid in set(global_sync_chats):
-                    if cid in nicknames and target_id in nicknames[cid]:
-                        del nicknames[cid][target_id]
-                        if not nicknames[cid]:
-                            del nicknames[cid]
-                        changed = True
-                save_nicks()
-                send_message(chat_id, f"Ник {get_user_link(target_id)} удалён во всех синхронизированных беседах." if changed else "У пользователя нет ника.")
+                if remove_nick(chat_id, target_id):
+                    send_message(chat_id, f"Ник {get_user_link(target_id)} удалён во всех синхронизированных беседах.")
+                else:
+                    send_message(chat_id, "У пользователя нет ника.")
                 return
             elif command == '/gssnick':
                 if len(parts) < args_start + 1:
                     send_message(chat_id, "Использование: /gssnick @user <ник>")
                     return
                 nick = ' '.join(parts[args_start:])
-                for cid in set(global_sync_chats):
-                    if cid not in nicknames:
-                        nicknames[cid] = {}
-                    nicknames[cid][target_id] = nick
-                save_nicks()
+                set_nick(chat_id, target_id, nick)
                 send_message(chat_id, f"Ник {get_user_link(target_id)} установлен во всех синхронизированных беседах: {nick}")
                 return
             elif command == '/gskick':
-                if not can_punish(chat_id, from_id, target_id):
-                    send_message(chat_id, "Недостаточно прав из-за иерархии ролей.")
-                    return
                 for cid in global_sync_chats:
                     kick_user(cid, target_id)
                 send_message(chat_id, f"{get_user_link(target_id)} исключён во всех синхронизированных беседах.")
                 return
             elif command == '/gsban':
-                if not can_punish(chat_id, from_id, target_id):
-                    send_message(chat_id, "Недостаточно прав из-за иерархии ролей.")
-                    return
                 reason = ' '.join(parts[args_start:]) if args_start < len(parts) else "не указана"
                 for cid in global_sync_chats:
                     ban_user(cid, target_id, from_id, reason)
@@ -2928,12 +2848,9 @@ def handle_message(event):
             if not target_id:
                 send_message(chat_id, "Укажите пользователя: /gbanpl @user или id")
                 return
-            if not can_punish(chat_id, from_id, target_id):
-                send_message(chat_id, "Недостаточно прав из-за иерархии ролей.")
-                return
             global_bans.add(target_id)
             save_global_bans()
-            all_chats = get_all_server_chats() | set(global_sync_chats)
+            all_chats = get_all_server_chats()
             for cid in all_chats:
                 ban_user(cid, target_id, from_id, "Глобальный бан")
                 ban_msg = f"{get_user_link(from_id)} применил глобальный бан к {get_user_link(target_id)}"
@@ -2948,8 +2865,6 @@ def handle_message(event):
             if target_id in global_bans:
                 global_bans.discard(target_id)
                 save_global_bans()
-                for cid in get_all_server_chats() | set(global_sync_chats):
-                    unban_user(cid, target_id)
                 send_message(chat_id, f"{get_user_link(target_id)} удалён из глобального бана.")
             else:
                 send_message(chat_id, "Пользователь не находится в глобальном бане.")
@@ -3074,21 +2989,7 @@ def handle_message(event):
             return
 
         elif command == '/antisliv':
-            if len(parts) < 2:
-                state = "включена" if chat_id in antisliv_chats else "выключена"
-                send_message(chat_id, f"Система антислива: {state}")
-                return
-            action = parts[1].lower()
-            if action == 'on':
-                antisliv_chats.add(chat_id)
-                save_antisliv()
-                send_message(chat_id, "Антислив включён: пересланные сообщения будут удаляться.")
-            elif action == 'off':
-                antisliv_chats.discard(chat_id)
-                save_antisliv()
-                send_message(chat_id, "Антислив выключен.")
-            else:
-                send_message(chat_id, "Используйте: /antisliv on или /antisliv off")
+            send_message(chat_id, "Система антислива включена. Все попытки пересылки сообщений будут отслеживаться. (Реализация требует доработки)")
             return
 
         elif command == '/chatinfo':
@@ -3110,10 +3011,7 @@ def handle_message(event):
 
         elif command == '/masskick':
             if msg.get('fwd_messages') or msg.get('reply_message'):
-                if not is_bot_admin(chat_id):
-                    send_message(chat_id, "Бот не является администратором этой беседы.")
-                    return
-                if target_id and can_punish(chat_id, from_id, target_id) and kick_user(chat_id, target_id)[0]:
+                if target_id and kick_user(chat_id, target_id)[0]:
                     send_message(chat_id, f"Исключён {get_user_link(target_id)}.")
                 else:
                     send_message(chat_id, "Не удалось исключить пользователя.")
@@ -3121,13 +3019,10 @@ def handle_message(event):
             if len(parts) < 2:
                 send_message(chat_id, "Использование: /masskick @user1 @user2 ...\nЛибо ответьте на сообщение: /masskick")
                 return
-            if not is_bot_admin(chat_id):
-                send_message(chat_id, "Бот не является администратором этой беседы.")
-                return
             kicked = 0
             for part in parts[1:]:
                 uid = extract_user_from_arg(part)
-                if uid and can_punish(chat_id, from_id, uid) and kick_user(chat_id, uid)[0]:
+                if uid and kick_user(chat_id, uid)[0]:
                     kicked += 1
             send_message(chat_id, f"Исключено {kicked} пользователей.")
             return
@@ -3190,8 +3085,6 @@ def handle_message(event):
                 try:
                     limit = int(parts[2])
                     interval = int(parts[3])
-                    if limit <= 0 or interval <= 0:
-                        raise ValueError
                     if chat_id not in antiflood_settings:
                         antiflood_settings[chat_id] = {}
                     antiflood_settings[chat_id]["limit"] = limit
@@ -3262,21 +3155,7 @@ def handle_message(event):
             return
 
         elif command == '/защита':
-            if len(parts) < 2:
-                state = "включена" if chat_id in protection_chats else "выключена"
-                send_message(chat_id, f"Защита от сторонних сообществ: {state}")
-                return
-            action = parts[1].lower()
-            if action == 'on':
-                protection_chats.add(chat_id)
-                save_protection()
-                send_message(chat_id, "Защита включена: приглашения сообществ/ботов будут отклоняться.")
-            elif action == 'off':
-                protection_chats.discard(chat_id)
-                save_protection()
-                send_message(chat_id, "Защита от сторонних сообществ выключена.")
-            else:
-                send_message(chat_id, "Используйте: /защита on или /защита off")
+            send_message(chat_id, "Защита от сторонних сообществ активирована. Приглашение ботов и чатов запрещено. (Реализация требует доработки)")
             return
 
         elif command == '/antitag':
@@ -3329,946 +3208,4 @@ def handle_message(event):
                     send_message(chat_id, "Пользователь не в списке.")
             else:
                 send_message(chat_id, "Используйте: /antitag add @user или /antitag remove @user")
-            return
-
-        elif command == '/newrole':
-            if len(parts) < 3:
-                send_message(chat_id, "Использование: /newrole <старое_название> <новое_название>")
-                return
-            old = parts[1]
-            new = ' '.join(parts[2:])
-            if old not in ROLE_LEVELS:
-                send_message(chat_id, "Роль не существует. Доступные: " + ", ".join(ROLE_LEVELS.keys()))
-                return
-            if chat_id not in custom_roles:
-                custom_roles[chat_id] = {}
-            custom_roles[chat_id][old] = new
-            save_custom_roles()
-            send_message(chat_id, f"Название роли «{old}» изменено на «{new}» в этой беседе.")
-            return
-
-    if command == '/givecash':
-        if not is_owner(from_id):
-            send_message(chat_id, "Команда доступна только владельцу бота.")
-            return
-        if msg.get('fwd_messages') or msg.get('reply_message'):
-            target_user = target_id
-            amount_index = 1
-        else:
-            if len(parts) < 3:
-                send_message(chat_id, "Использование: /givecash @user <количество>\nЛибо ответьте на сообщение: /givecash <количество>")
-                return
-            target_user = extract_user_from_arg(parts[1])
-            amount_index = 2
-        if not target_user:
-            send_message(chat_id, "Не удалось определить пользователя.")
-            return
-        if amount_index >= len(parts):
-            send_message(chat_id, "Укажите количество.")
-            return
-        try:
-            amount = int(parts[amount_index])
-        except (ValueError, TypeError):
-            send_message(chat_id, "Количество должно быть целым числом.")
-            return
-        if amount <= 0:
-            send_message(chat_id, "Количество должно быть положительным.")
-            return
-        add_money(target_user, amount)
-        send_message(chat_id, f"{get_user_link(target_user)} выдано {amount:,}$.")
-        return
-
-    if command == '/createpromo':
-        if not is_owner(from_id):
-            send_message(chat_id, "Команда доступна только владельцу бота.")
-            return
-        if len(parts) < 3:
-            send_message(chat_id, "Использование: /createpromo <промокод> <количество>")
-            return
-        code = parts[1].strip().upper()
-        if not re.fullmatch(r'[A-ZА-ЯЁ0-9_-]{1,32}', code):
-            send_message(chat_id, "Промокод должен содержать только буквы, цифры, _ или - и быть длиной до 32 символов.")
-            return
-        try:
-            amount = int(parts[2])
-        except ValueError:
-            send_message(chat_id, "Количество должно быть целым числом.")
-            return
-        if amount <= 0:
-            send_message(chat_id, "Количество должно быть положительным.")
-            return
-        if code in promos:
-            send_message(chat_id, "Такой промокод уже существует.")
-            return
-        promos[code] = {"amount": amount, "used_by": []}
-        save_promos()
-        send_message(chat_id, f"Промокод {code} создан на {amount:,}$.")
-        return
-
-    if command in ('/offgame', '/ongame'):
-        if not has_admin_rights(chat_id, from_id):
-            send_message(chat_id, "Недостаточно прав.")
-            return
-        if command == '/offgame':
-            game_disabled_chats.add(chat_id)
-            save_game_disabled()
-            send_message(chat_id, "Игровая система в этой беседе выключена.")
-        else:
-            game_disabled_chats.discard(chat_id)
-            save_game_disabled()
-            send_message(chat_id, "Игровая система в этой беседе включена.")
-        return
-
-    if chat_id in game_disabled_chats and command in (
-        '/balance', '/баланс', '/casino', '/казино', '/prize', '/приз',
-        '/promo', '/промо', '/buyvip', '/transfer', '/передать',
-        '/top', '/топ', '/duel', '/дуэль'
-    ):
-        send_message(chat_id, "Игровая система в этой беседе выключена.")
-        return
-
-    if command in ('/balance', '/баланс'):
-        target = from_id
-        if msg.get('fwd_messages'):
-            target = msg['fwd_messages'][0]['from_id']
-        elif msg.get('reply_message'):
-            target = msg['reply_message']['from_id']
-        elif len(parts) > 1:
-            extracted = extract_user_from_arg(parts[1])
-            if extracted:
-                target = extracted
-
-        data = balances.get(target, {})
-        if not data:
-            data = {
-                "balance": 0,
-                "vip": False,
-                "vip_until": 0,
-                "daily_last": 0,
-                "duel_wins": 0,
-                "duel_losses": 0,
-                "casino_won": 0,
-                "casino_lost": 0,
-                "transferred_sent": 0,
-                "transferred_received": 0,
-                "total_won": 0,
-                "total_lost": 0,
-                "promo_used": False
-            }
-            balances[target] = data
-            save_balances()
-
-        balance = data["balance"]
-        vip_status = "VIP" if is_vip(target) else "Обычный"
-        if is_vip(target):
-            remaining = get_vip_remaining(target)
-            vip_info = f"⭐ Статус: {vip_status}\n⏳ До окончания статуса: {format_time_left(remaining)}"
-        else:
-            vip_info = f"⭐ Статус: {vip_status}"
-
-        lines = [
-            f"💰 У тебя {balance:,}$",
-            f"🏆 Дуэлей выиграно: {data['duel_wins']}",
-            f"💔 Дуэлей проиграно: {data['duel_losses']}",
-            f"🎉 Всего выиграно: {data['total_won']:,}$",
-            f"💰 Всего проиграно: {data['total_lost']:,}$",
-            f"🎰 Казино выиграно: {data['casino_won']:,}$",
-            f"🎮 Казино проиграно: {data['casino_lost']:,}$",
-            f"📤 Отправлено переводами: {data['transferred_sent']:,}$",
-            f"📥 Получено переводами: {data['transferred_received']:,}$",
-            vip_info
-        ]
-        send_message(chat_id, "\n".join(lines))
-        return
-
-    if command in ('/casino', '/казино'):
-        if len(parts) < 2:
-            send_message(chat_id, "Использование: /casino <ставка>")
-            return
-        try:
-            amount = int(parts[1])
-            if amount <= 0:
-                send_message(chat_id, "Ставка должна быть положительным числом.")
-                return
-        except:
-            send_message(chat_id, "Ставка должна быть числом.")
-            return
-
-        user_data = balances.get(from_id)
-        if not user_data:
-            user_data = {
-                "balance": 0,
-                "vip": False,
-                "vip_until": 0,
-                "daily_last": 0,
-                "duel_wins": 0,
-                "duel_losses": 0,
-                "casino_won": 0,
-                "casino_lost": 0,
-                "transferred_sent": 0,
-                "transferred_received": 0,
-                "total_won": 0,
-                "total_lost": 0,
-                "promo_used": False
-            }
-            balances[from_id] = user_data
-
-        if user_data["balance"] < amount:
-            send_message(chat_id, "Недостаточно средств.")
-            return
-
-        items = ["🍒", "🍋", "🍉", "🍇", "🍊", "🍓", "🍏", "⭐"]
-        roll = [random.choice(items) for _ in range(3)]
-        unique_count = len(set(roll))
-
-        win = 0
-        if unique_count == 1:
-            win = amount * 3
-            result_text = f"🎉 ДЖЕКПОТ! Выпало три одинаковых предмета!\n💰 Выигрыш: {win:,}$"
-        elif unique_count == 2:
-            win = amount * 2
-            result_text = f"💰 Выигрыш: {win:,}$"
-        else:
-            win = 0
-            result_text = "😥 К сожалению, все предметы разные"
-
-        user_data["balance"] -= amount
-        if win > 0:
-            user_data["balance"] += win
-            user_data["casino_won"] += win
-            user_data["total_won"] += win
-        else:
-            user_data["casino_lost"] += amount
-            user_data["total_lost"] += amount
-        save_balances()
-
-        message = (
-            f"🎰 РЕЗУЛЬТАТЫ КАЗИНО\n"
-            f"🤵‍♂️ Игрок: {get_user_link(from_id)}\n"
-            f"🤑 Ставка: {amount:,}$\n"
-            f"🎯 Выпавшие предметы: [ {' '.join(roll)} ]\n"
-            f"{result_text}\n"
-            f"💎 Стартовый баланс: {user_data['balance'] - (win - amount):,}$\n"
-            f"💎 Новый баланс: {user_data['balance']:,}$"
-        )
-        send_message(chat_id, message)
-        return
-
-    if command in ('/bonus', '/приз'):
-        user_data = balances.get(from_id)
-        if not user_data:
-            user_data = {
-                "balance": 0,
-                "vip": False,
-                "vip_until": 0,
-                "daily_last": 0,
-                "duel_wins": 0,
-                "duel_losses": 0,
-                "casino_won": 0,
-                "casino_lost": 0,
-                "transferred_sent": 0,
-                "transferred_received": 0,
-                "total_won": 0,
-                "total_lost": 0,
-                "promo_used": False
-            }
-            balances[from_id] = user_data
-
-        now = time.time()
-        if now - user_data["daily_last"] < 86400:
-            remaining = int(86400 - (now - user_data["daily_last"]))
-            hours = remaining // 3600
-            minutes = (remaining % 3600) // 60
-            send_message(chat_id, f"Вы уже получали приз. Подождите {hours}ч {minutes}м.")
-            return
-
-        if is_vip(from_id):
-            prize = random.randint(5000, 10000)
-        else:
-            prize = random.randint(2000, 5000)
-        user_data["balance"] += prize
-        user_data["daily_last"] = now
-        save_balances()
-        send_message(chat_id, f"🎉 Ты получил(-а) {prize:,}$!")
-        return
-
-    if command in ('/promo', '/промо'):
-        if len(parts) < 2:
-            send_message(chat_id, "Использование: /promo <промокод>")
-            return
-        code = parts[1].strip().upper()
-        promo = promos.get(code)
-        if not promo:
-            send_message(chat_id, "Промокод не найден.")
-            return
-        if from_id in promo["used_by"]:
-            send_message(chat_id, "Вы уже использовали этот промокод.")
-            return
-        add_money(from_id, promo["amount"])
-        promo["used_by"].append(from_id)
-        save_promos()
-        save_balances()
-        send_message(chat_id, f"Промокод активирован! Вы получили {promo['amount']:,}$!")
-        return
-
-    if command == '/buyvip':
-        user_data = balances.get(from_id)
-        if not user_data:
-            user_data = {
-                "balance": 0,
-                "vip": False,
-                "vip_until": 0,
-                "daily_last": 0,
-                "duel_wins": 0,
-                "duel_losses": 0,
-                "casino_won": 0,
-                "casino_lost": 0,
-                "transferred_sent": 0,
-                "transferred_received": 0,
-                "total_won": 0,
-                "total_lost": 0,
-                "promo_used": False
-            }
-            balances[from_id] = user_data
-
-        if is_vip(from_id):
-            send_message(chat_id, "У вас уже есть VIP статус.")
-            return
-        if user_data["balance"] < 20000:
-            send_message(chat_id, "Недостаточно средств. VIP стоит 20 000$.")
-            return
-
-        user_data["balance"] -= 20000
-        user_data["vip"] = True
-        user_data["vip_until"] = time.time() + 30 * 86400
-        save_balances()
-        send_message(chat_id, "👑 Поздравляем! Вы приобрели VIP на 1 мес.\n💰 Цена: 20.000$/мес.\n💸 Списано: 20.000$\nТеперь вы получаете увеличенный приз!")
-        return
-
-    if command == '/transfer' or command == '/передать':
-        if msg.get('fwd_messages') or msg.get('reply_message'):
-            recipient = target_id
-            amount_index = 1
-        else:
-            if len(parts) < 3:
-                send_message(chat_id, "Использование: /передать @user <сумма>\nЛибо ответьте на сообщение: /передать <сумма>")
-                return
-            recipient = extract_user_from_arg(parts[1])
-            amount_index = 2
-        if not recipient:
-            send_message(chat_id, "Не удалось определить получателя.")
-            return
-        if amount_index >= len(parts):
-            send_message(chat_id, "Укажите сумму.")
-            return
-        try:
-            amount = int(parts[amount_index])
-            if amount <= 0:
-                send_message(chat_id, "Сумма должна быть положительной.")
-                return
-        except (ValueError, TypeError):
-            send_message(chat_id, "Сумма должна быть числом.")
-            return
-
-        if recipient == from_id:
-            send_message(chat_id, "Нельзя переводить самому себе.")
-            return
-
-        sender_data = balances.get(from_id)
-        if not sender_data:
-            sender_data = {
-                "balance": 0,
-                "vip": False,
-                "vip_until": 0,
-                "daily_last": 0,
-                "duel_wins": 0,
-                "duel_losses": 0,
-                "casino_won": 0,
-                "casino_lost": 0,
-                "transferred_sent": 0,
-                "transferred_received": 0,
-                "total_won": 0,
-                "total_lost": 0,
-                "promo_used": False
-            }
-            balances[from_id] = sender_data
-
-        if sender_data["balance"] < amount:
-            send_message(chat_id, "Недостаточно средств.")
-            return
-
-        recipient_data = balances.get(recipient)
-        if not recipient_data:
-            recipient_data = {
-                "balance": 0,
-                "vip": False,
-                "vip_until": 0,
-                "daily_last": 0,
-                "duel_wins": 0,
-                "duel_losses": 0,
-                "casino_won": 0,
-                "casino_lost": 0,
-                "transferred_sent": 0,
-                "transferred_received": 0,
-                "total_won": 0,
-                "total_lost": 0,
-                "promo_used": False
-            }
-            balances[recipient] = recipient_data
-
-        sender_data["balance"] -= amount
-        sender_data["transferred_sent"] += amount
-        recipient_data["balance"] += amount
-        recipient_data["transferred_received"] += amount
-        save_balances()
-
-        send_message(chat_id, f"💸 {get_user_link(from_id)} передал {amount:,}$ {get_user_link(recipient)}")
-        return
-
-    if command == '/top' or command == '/топ':
-        top_list = []
-        for uid, data in balances.items():
-            if data["balance"] > 0:
-                top_list.append((uid, data["balance"], data.get("vip", False)))
-        top_list.sort(key=lambda x: x[1], reverse=True)
-        top_list = top_list[:10]
-
-        if not top_list:
-            send_message(chat_id, "Топ пуст.")
-            return
-
-        lines = ["💰 Самые богатые пользователи:"]
-        for i, (uid, balance, vip) in enumerate(top_list, 1):
-            status = "VIP" if vip else ""
-            nick = get_nick(chat_id, uid) or ""
-            name = f"[id{uid}|{get_full_name(uid)}]"
-            if nick:
-                name += f" ({nick})"
-            line = f"Топ: {i} 👑: {status} {name} | {balance:,}$"
-            lines.append(line)
-        send_message(chat_id, "\n".join(lines))
-        return
-
-    if command == '/duel' or command == '/дуэль':
-        if msg.get('fwd_messages') or msg.get('reply_message'):
-            opponent = target_id
-            amount_index = 1
-        else:
-            if len(parts) < 3:
-                send_message(chat_id, "Использование: /дуэль @user <сумма>\nЛибо ответьте на сообщение: /дуэль <сумма>")
-                return
-            opponent = extract_user_from_arg(parts[1])
-            amount_index = 2
-        if not opponent:
-            send_message(chat_id, "Не удалось определить противника.")
-            return
-        if opponent == from_id:
-            send_message(chat_id, "Нельзя вызвать самого себя.")
-            return
-        if amount_index >= len(parts):
-            send_message(chat_id, "Укажите сумму.")
-            return
-        try:
-            amount = int(parts[amount_index])
-            if amount <= 0:
-                send_message(chat_id, "Сумма должна быть положительной.")
-                return
-        except (ValueError, TypeError):
-            send_message(chat_id, "Сумма должна быть числом.")
-            return
-
-        challenger_data = balances.get(from_id)
-        if not challenger_data or challenger_data["balance"] < amount:
-            send_message(chat_id, "У вас недостаточно средств.")
-            return
-
-        opponent_data = balances.get(opponent)
-        if not opponent_data or opponent_data["balance"] < amount:
-            send_message(chat_id, f"У {get_user_link(opponent)} недостаточно средств.")
-            return
-
-        duel_text = f"⚔️ {get_user_link(from_id)} предложил сразиться в дуэли на {amount:,}$"
-        keyboard = get_duel_keyboard(from_id, opponent, amount, chat_id)
-        try:
-            result = vk.messages.send(
-                peer_id=peer_id,
-                message=duel_text,
-                random_id=get_random_id(),
-                keyboard=keyboard
-            )
-            message_id = result['conversation_message_id']
-            if chat_id not in active_duels:
-                active_duels[chat_id] = {}
-            active_duels[chat_id][message_id] = {
-                "challenger": from_id,
-                "opponent": opponent,
-                "amount": amount
-            }
-        except Exception as e:
-            send_message(chat_id, f"Ошибка отправки дуэли: {e}")
-        return
-
-def handle_invite(event):
-    msg = event.message
-    action = msg.get('action')
-    if not action or action.get('type') not in ('chat_invite_user', 'chat_invite_user_by_link'):
-        return
-    chat_id = msg['peer_id'] - 2000000000
-    invited = action.get('member_id')
-    if not isinstance(invited, int):
-        return
-
-    if chat_id not in msg_stats:
-        msg_stats[chat_id] = {}
-    msg_stats[chat_id].setdefault(invited, {"count": 0, "last_time": 0})
-    save_msg_stats()
-
-    if chat_id in protection_chats and invited < 0:
-        try:
-            if is_bot_admin(chat_id):
-                vk.messages.removeChatUser(chat_id=chat_id, user_id=invited)
-                send_message(chat_id, "Защита: приглашение стороннего сообщества/бота отклонено.")
-        except Exception as e:
-            print(f"Ошибка защиты от сообщества {invited}: {e}")
-        return
-
-    if invited in global_bans:
-        try:
-            vk.messages.removeChatUser(chat_id=chat_id, user_id=invited)
-            send_message(chat_id, f"{get_user_link(invited)} находится в глобальном бане.")
-        except:
-            pass
-        return
-
-    if chat_id in banned_users and invited in banned_users[chat_id]:
-        try:
-            if is_bot_admin(chat_id):
-                vk.messages.removeChatUser(chat_id=chat_id, user_id=invited)
-        except Exception as e:
-            print(f"Ошибка удаления забаненного пользователя {invited}: {e}")
-        send_message(chat_id, f"{get_user_link(invited)} находится в бане этой беседы.")
-        return
-
-    if chat_id in invite_settings and invite_settings[chat_id].get("only_mods"):
-        inviter = msg['from_id']
-        if not has_moderation_rights(chat_id, inviter):
-            try:
-                vk.messages.removeChatUser(chat_id=chat_id, user_id=invited)
-                send_message(chat_id, f"{get_user_link(inviter)}, только модераторы могут добавлять пользователей.")
-            except:
-                pass
-            return
-
-    send_welcome(chat_id, invited)
-
-def process_callback(event):
-    obj = event.object
-    user_id = obj['user_id']
-    peer_id = obj['peer_id']
-    event_id = obj['event_id']
-    payload_data = obj.get('payload', '{}')
-    if isinstance(payload_data, dict):
-        payload = payload_data
-    else:
-        try:
-            payload = json.loads(payload_data)
-        except:
-            payload = {}
-    conversation_message_id = obj.get('conversation_message_id')
-    chat_id = peer_id - 2000000000
-
-    try:
-        vk.messages.sendMessageEventAnswer(
-            event_id=event_id,
-            user_id=user_id,
-            peer_id=peer_id,
-            event_data={}
-        )
-    except Exception as e:
-        print(f"Ошибка при ответе на callback: {e}")
-
-    cmd = payload.get('cmd')
-
-    if cmd == 'chatlog':
-        if not can_view_logs(user_id):
-            return
-        page = payload.get('page', 1)
-        chat_filter = payload.get('chat_id')
-        try:
-            page = int(page)
-            if chat_filter is not None:
-                chat_filter = int(chat_filter)
-        except (TypeError, ValueError):
-            return
-        text, keyboard = get_chatlog_message(page, chat_filter)
-        try:
-            vk.messages.edit(
-                peer_id=peer_id,
-                conversation_message_id=conversation_message_id,
-                message=text,
-                keyboard=keyboard
-            )
-        except Exception as e:
-            print(f"Ошибка редактирования chatlog: {e}")
-
-    elif cmd == 'nlist':
-        page = payload.get('page', 1)
-        if not has_moderation_rights(chat_id, user_id):
-            return
-        text, keyboard = get_nlist_message(chat_id, page)
-        if text is None:
-            text = "Ники отсутствуют."
-            keyboard = None
-        try:
-            vk.messages.edit(
-                peer_id=peer_id,
-                conversation_message_id=conversation_message_id,
-                message=text,
-                keyboard=keyboard
-            )
-        except Exception as e:
-            print(f"Ошибка редактирования nlist: {e}")
-
-    elif cmd == 'nonick':
-        if not has_moderation_rights(chat_id, user_id):
-            return
-        try:
-            if conversation_message_id:
-                vk.messages.delete(peer_id=peer_id, cmids=[conversation_message_id], delete_for_all=True)
-        except:
-            pass
-        text, keyboard = get_nonick_message(chat_id, 1)
-        if text is None:
-            text = "У всех есть ники."
-            keyboard = None
-        send_message(chat_id, text, keyboard=keyboard)
-
-    elif cmd == 'nonick_page':
-        page = payload.get('page', 1)
-        if not has_moderation_rights(chat_id, user_id):
-            return
-        text, keyboard = get_nonick_message(chat_id, page)
-        if text is None:
-            text = "У всех есть ники."
-            keyboard = None
-        try:
-            vk.messages.edit(
-                peer_id=peer_id,
-                conversation_message_id=conversation_message_id,
-                message=text,
-                keyboard=keyboard
-            )
-        except Exception as e:
-            print(f"Ошибка редактирования nonick_page: {e}")
-
-    elif cmd == 'unmute':
-        target_id = payload.get('user_id')
-        if not target_id:
-            return
-        success, status = unmute_user(chat_id, target_id, user_id)
-        if success:
-            try:
-                if conversation_message_id:
-                    vk.messages.delete(peer_id=peer_id, cmids=[conversation_message_id], delete_for_all=True)
-            except:
-                pass
-            send_message(chat_id, f"{get_user_link(user_id)} размьютил(а) {get_user_link(target_id)}")
-        else:
-            if status == "not_muted":
-                text = "Пользователь не в муте."
-            elif status == "no_rights":
-                text = "Вы не можете снять этот мут."
-            else:
-                text = "Ошибка."
-            try:
-                vk.messages.sendMessageEventAnswer(
-                    event_id=event_id,
-                    user_id=user_id,
-                    peer_id=peer_id,
-                    event_data=json.dumps({"type": "show_snackbar", "text": text})
-                )
-            except Exception as e:
-                print(f"Ошибка sendMessageEventAnswer (unmute): {e}")
-            return
-
-    elif cmd == 'clear_mute':
-        target_id = payload.get('user_id')
-        reply_cmid = payload.get('reply_cmid')
-        original_text = payload.get('original_text', '')
-        if not target_id or not reply_cmid:
-            return
-        if not has_moderation_rights(chat_id, user_id):
-            return
-        try:
-            vk.messages.delete(peer_id=peer_id, cmids=[reply_cmid], delete_for_all=True)
-        except:
-            pass
-        try:
-            vk.messages.edit(
-                peer_id=peer_id,
-                conversation_message_id=conversation_message_id,
-                message=original_text,
-                keyboard=get_unmute_keyboard(target_id)
-            )
-            send_message(chat_id, f"{get_user_link(user_id)} очистил(а) сообщение!")
-        except Exception as e:
-            print(f"Ошибка редактирования clear_mute: {e}")
-
-    elif cmd == 'alt':
-        if not has_moderation_rights(chat_id, user_id):
-            try:
-                vk.messages.edit(
-                    peer_id=peer_id,
-                    conversation_message_id=conversation_message_id,
-                    message="Недостаточно прав.",
-                    keyboard=None
-                )
-            except:
-                pass
-            return
-        alt_text = (
-            "Альтернативные команды:\n"
-            "/clear — чистка\n"
-            "/staff — стафф\n"
-            "/getnick — gnick, ник\n"
-            "/setnick — snick\n"
-            "/removenick — rnick\n"
-            "/nlist — ники\n"
-            "/getacc — аккаунт\n"
-            "/getban — чекбан\n"
-            "/kick — кик\n"
-            "/mute — мут, заткнуть\n"
-            "/unmute — размут, разоткнуть\n"
-            "/addmoder — mod, модер, модератор\n"
-            "/ban — бан\n"
-            "/banlist — банлист, списокбана\n"
-            "/onlinelist — olist\n"
-            "/removerole — сроль, rrole, участник\n"
-            "/unban — разбан\n"
-            "/zov — зов"
-        )
-        buttons = [[{
-            "action": {
-                "type": "callback",
-                "payload": json.dumps({"cmd": "show_help"}),
-                "label": "Все доступные команды"
-            },
-            "color": "primary"
-        }]]
-        keyboard = json.dumps({"inline": True, "buttons": buttons})
-        try:
-            vk.messages.edit(
-                peer_id=peer_id,
-                conversation_message_id=conversation_message_id,
-                message=alt_text,
-                keyboard=keyboard
-            )
-        except Exception as e:
-            print(f"Ошибка редактирования alt: {e}")
-
-    elif cmd == 'show_help':
-        if not has_moderation_rights(chat_id, user_id):
-            try:
-                vk.messages.edit(
-                    peer_id=peer_id,
-                    conversation_message_id=conversation_message_id,
-                    message="Недостаточно прав.",
-                    keyboard=None
-                )
-            except:
-                pass
-            return
-        help_text, help_keyboard = get_help_text_and_keyboard(chat_id, user_id)
-        try:
-            vk.messages.edit(
-                peer_id=peer_id,
-                conversation_message_id=conversation_message_id,
-                message=help_text,
-                keyboard=help_keyboard
-            )
-        except Exception as e:
-            print(f"Ошибка редактирования show_help: {e}")
-            try:
-                vk.messages.delete(peer_id=peer_id, cmids=[conversation_message_id], delete_for_all=True)
-            except:
-                pass
-            send_help(chat_id, user_id)
-
-    elif cmd == 'unban_btn':
-        target_id = payload.get('user_id')
-        if not target_id:
-            return
-        if not has_senior_moderator_rights(chat_id, user_id):
-            return
-        if unban_user(chat_id, target_id):
-            try:
-                if conversation_message_id:
-                    vk.messages.edit(
-                        peer_id=peer_id,
-                        conversation_message_id=conversation_message_id,
-                        message=f"{get_user_link(target_id)} разбанен.",
-                        keyboard=None
-                    )
-            except:
-                pass
-        else:
-            pass
-
-    elif cmd == 'duel_accept':
-        challenger = payload.get('challenger')
-        opponent = payload.get('opponent')
-        amount = payload.get('amount')
-        chat_id_payload = payload.get('chat_id')
-        try:
-            amount = int(amount)
-            challenger = int(challenger)
-            opponent = int(opponent)
-            if chat_id_payload is not None and int(chat_id_payload) != chat_id:
-                return
-        except (TypeError, ValueError):
-            return
-        if user_id != opponent:
-            try:
-                vk.messages.sendMessageEventAnswer(
-                    event_id=event_id,
-                    user_id=user_id,
-                    peer_id=peer_id,
-                    event_data=json.dumps({"type": "show_snackbar", "text": "Вы не являетесь оппонентом."})
-                )
-            except:
-                pass
-            return
-
-        if chat_id not in active_duels or conversation_message_id not in active_duels[chat_id]:
-            try:
-                vk.messages.edit(
-                    peer_id=peer_id,
-                    conversation_message_id=conversation_message_id,
-                    message="Дуэль уже неактивна или была отменена.",
-                    keyboard=None
-                )
-            except:
-                pass
-            return
-
-        duel = active_duels[chat_id][conversation_message_id]
-        if duel["challenger"] != challenger or duel["opponent"] != opponent or duel["amount"] != amount:
-            try:
-                vk.messages.edit(
-                    peer_id=peer_id,
-                    conversation_message_id=conversation_message_id,
-                    message="Данные дуэли не совпадают.",
-                    keyboard=None
-                )
-            except:
-                pass
-            return
-
-        challenger_data = balances.get(challenger)
-        opponent_data = balances.get(opponent)
-        if not challenger_data or challenger_data["balance"] < amount:
-            send_message(chat_id, f"{get_user_link(challenger)} больше не имеет {amount:,}$.")
-            try:
-                vk.messages.edit(
-                    peer_id=peer_id,
-                    conversation_message_id=conversation_message_id,
-                    message="Дуэль отменена (недостаточно средств у вызывающего).",
-                    keyboard=None
-                )
-            except:
-                pass
-            del active_duels[chat_id][conversation_message_id]
-            return
-        if not opponent_data or opponent_data["balance"] < amount:
-            send_message(chat_id, f"{get_user_link(opponent)} больше не имеет {amount:,}$.")
-            try:
-                vk.messages.edit(
-                    peer_id=peer_id,
-                    conversation_message_id=conversation_message_id,
-                    message="Дуэль отменена (недостаточно средств у оппонента).",
-                    keyboard=None
-                )
-            except:
-                pass
-            del active_duels[chat_id][conversation_message_id]
-            return
-
-        winner = random.choice([challenger, opponent])
-        loser = opponent if winner == challenger else challenger
-
-        challenger_data["balance"] -= amount
-        opponent_data["balance"] -= amount
-        winner_data = balances[winner]
-        winner_data["balance"] += amount * 2
-        winner_data["duel_wins"] += 1
-        winner_data["total_won"] += amount * 2
-        loser_data = balances[loser]
-        loser_data["duel_losses"] += 1
-        loser_data["total_lost"] += amount
-        save_balances()
-
-        try:
-            vk.messages.delete(peer_id=peer_id, cmids=[conversation_message_id], delete_for_all=True)
-        except:
-            pass
-        del active_duels[chat_id][conversation_message_id]
-
-        result_text = f"⚔️ Дуэль завершена!\n🏆 Победитель: {get_user_link(winner)}\n💸 Выигрыш: {amount*2:,}$"
-        send_message(chat_id, result_text)
-
-    elif cmd == 'duel_reject':
-        challenger = payload.get('challenger')
-        opponent = payload.get('opponent')
-        amount = payload.get('amount')
-        chat_id_payload = payload.get('chat_id')
-        try:
-            amount = int(amount)
-            challenger = int(challenger)
-            opponent = int(opponent)
-            if chat_id_payload is not None and int(chat_id_payload) != chat_id:
-                return
-        except (TypeError, ValueError):
-            return
-        if user_id != opponent and user_id != challenger:
-            try:
-                vk.messages.sendMessageEventAnswer(
-                    event_id=event_id,
-                    user_id=user_id,
-                    peer_id=peer_id,
-                    event_data=json.dumps({"type": "show_snackbar", "text": "Вы не участник этой дуэли."})
-                )
-            except:
-                pass
-            return
-
-        try:
-            vk.messages.delete(peer_id=peer_id, cmids=[conversation_message_id], delete_for_all=True)
-        except:
-            pass
-        if chat_id in active_duels and conversation_message_id in active_duels[chat_id]:
-            del active_duels[chat_id][conversation_message_id]
-        rejected_by = user_id
-        other = challenger if rejected_by == opponent else opponent
-        send_message(chat_id, f"❌ {get_user_link(rejected_by)} отклонил дуэль с {get_user_link(other)}.")
-
-def main():
-    print("Bot started!")
-    while True:
-        try:
-            for event in longpoll.listen():
-                try:
-                    if event.type == VkBotEventType.MESSAGE_NEW:
-                        if event.message.get('action'):
-                            handle_invite(event)
-                        else:
-                            handle_message(event)
-                    elif event.type == VkBotEventType.MESSAGE_EVENT:
-                        process_callback(event)
-                except Exception as inner_e:
-                    print(f"Ошибка обработки события: {inner_e}")
-        except Exception as e:
-            print(f"Error: {e}")
-            time.sleep(5)
-
-if __name__ == '__main__':
-    main()
+           
