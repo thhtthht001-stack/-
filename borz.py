@@ -30,6 +30,7 @@ INFO_FILE = "info_text.json"
 MSG_STATS_FILE = "msg_stats.json"
 LOG_CHAT_ID = 0
 GLOBAL_BANS_FILE = "global_bans.json"
+TESTERS_FILE = "testers.json"
 DATA_DIR = os.environ.get(
     "BOT_DATA_DIR",
     os.path.dirname(os.path.abspath(__file__)),
@@ -38,7 +39,6 @@ os.makedirs(DATA_DIR, exist_ok=True)
 CHAT_LOG_FILE = os.path.join(DATA_DIR, "chat_logs.txt")
 LOG_DATABASE_FILE = os.path.join(DATA_DIR, "bot_data.sqlite3")
 LOGS_ACCESS_FILE = "logs_access.json"
-
 
 def initialize_log_database():
     with sqlite3.connect(LOG_DATABASE_FILE) as connection:
@@ -65,7 +65,6 @@ def initialize_log_database():
                         )
         connection.commit()
 
-
 initialize_log_database()
 
 FILTER_FILE = "filter.json"
@@ -88,20 +87,21 @@ vk_session = vk_api.VkApi(token=TOKEN, api_version=API_VERSION)
 vk = vk_session.get_api()
 longpoll = VkBotLongPoll(vk_session, GROUP_ID)
 
-muted_users = {}          # {chat_id: {user_id: {"end": timestamp, "issuer": issuer_id}}}
+muted_users = {}
 banned_users = {}
 user_roles = {}
 user_domains = {}
 nicknames = {}
 warns = {}
 quiet_chats = set()
-server_chats = {}         # {server_id: set(chat_ids)}
+server_chats = {}
 custom_info_text = ""
 chat_names = {}
 msg_stats = {}
 BOT_ID = None
 global_bans = set()
 logs_access = set()
+TESTER_IDS = set()
 
 processed_messages = {}
 PROCESSED_TTL = 2
@@ -125,6 +125,7 @@ balances = {}
 promos = {}
 active_duels = {}
 game_disabled_chats = set()
+
 def save_balances():
     with open(BALANCES_FILE, 'w', encoding='utf-8') as f:
         json.dump({str(uid): data for uid, data in balances.items()}, f, ensure_ascii=False, indent=2)
@@ -173,9 +174,7 @@ ROLE_LEVELS = {
     "Спец администратор": 6
 }
 
-
 def log_chat_message(msg):
-    """Сохраняет каждое сообщение пользователя в SQLite-базу логов."""
     try:
         from_id = msg.get('from_id')
         peer_id = msg.get('peer_id')
@@ -222,8 +221,22 @@ def log_chat_message(msg):
     except Exception as exc:
         print(f"Ошибка записи лога чата: {exc}")
 
+def save_testers():
+    with open(TESTERS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(sorted(TESTER_IDS), f)
 
-# ---------- Загрузка/сохранение ----------
+def load_testers():
+    global TESTER_IDS
+    if os.path.exists(TESTERS_FILE):
+        try:
+            with open(TESTERS_FILE, 'r', encoding='utf-8') as f:
+                TESTER_IDS = set(json.load(f))
+        except Exception as e:
+            print(f"Ошибка загрузки {TESTERS_FILE}: {e}")
+            TESTER_IDS = set()
+    else:
+        TESTER_IDS = set()
+
 def load_data():
     global muted_users, banned_users, user_roles, nicknames, warns, quiet_chats, server_chats
     global filter_words, welcome_texts, antiflood_settings, invite_settings, antitag_users
@@ -442,6 +455,7 @@ def load_data():
         print(f"Ошибка загрузки {GAME_DISABLED_FILE}: {e}")
         game_disabled_chats = set()
 
+    load_testers()
 
 def load_info():
     global custom_info_text
@@ -576,7 +590,6 @@ def cleanup_processed():
 
 cleanup_processed()
 
-# ---------- Юзернеймы ----------
 def get_domain(user_id):
     if user_id in user_domains:
         return user_domains[user_id]
@@ -630,11 +643,9 @@ def cleanup_mutes():
 cleanup_mutes()
 
 def extract_user_from_arg(arg):
-    # 1. [id123|Имя]
     match = re.search(r'\[id(\d+)\|.*?\]', arg)
     if match:
         return int(match.group(1))
-    # 2. ссылка VK на числовой ID или короткое имя
     vk_link = re.fullmatch(
         r'(?:https?://)?(?:m\.)?(?:vk\.com|vk\.ru)/(?:id(\d+)|([A-Za-z0-9_.]+))/?',
         arg.strip(),
@@ -651,11 +662,9 @@ def extract_user_from_arg(arg):
         except:
             pass
         return None
-    # 3. @id123
     match = re.search(r'@id(\d+)', arg)
     if match:
         return int(match.group(1))
-    # 4. @screenname
     match = re.search(r'@(\w+)', arg)
     if match:
         screen_name = match.group(1)
@@ -665,7 +674,6 @@ def extract_user_from_arg(arg):
                 return info['object_id']
         except:
             pass
-    # 5. чистый ID (число)
     if arg.isdigit():
         return int(arg)
     return None
@@ -698,7 +706,6 @@ def is_admin(chat_id, user_id):
     return False
 
 def is_bot_admin(chat_id):
-    """Проверяет, является ли САМ БОТ администратором конкретной беседы."""
     try:
         members = vk.messages.getConversationMembers(
             peer_id=2000000000 + chat_id,
@@ -757,7 +764,6 @@ def get_user_link(user_id):
         return "пользователь"
     return f"[id{user_id}|{get_full_name(user_id)}]"
 
-# ---------- Клавиатуры ----------
 def get_nlist_keyboard(page, total_pages):
     buttons = []
     row = []
@@ -1081,7 +1087,6 @@ def get_mute_keyboard(target_id, reply_cmid=None, original_text=""):
         })
     return json.dumps({"inline": True, "buttons": [row]})
 
-# ---------- Права ----------
 def get_user_role(chat_id, user_id):
     if user_id in OWNER_IDS:
         return "Спец администратор"
@@ -1127,7 +1132,6 @@ def restart_bot():
     os.execv(sys.executable, [sys.executable] + sys.argv)
 
 def get_current_server_id(chat_id):
-    """Возвращает ID сервера, к которому привязана беседа, или None."""
     for s_id, chats in server_chats.items():
         if chat_id in chats:
             return s_id
@@ -1137,7 +1141,7 @@ def get_role_level(role):
     return ROLE_LEVELS.get(role, 0)
 
 def is_owner(user_id):
-    return user_id in OWNER_IDS
+    return user_id in OWNER_IDS or user_id in TESTER_IDS
 
 def can_view_logs(user_id):
     return is_owner(user_id) or user_id in logs_access
@@ -1188,7 +1192,6 @@ def can_remove_role(chat_id, remover_id, target_user_id):
         return False
     return get_role_level(remover_role) > get_role_level(target_role)
 
-# ---------- Функция проверки иерархии для наказаний ----------
 def get_user_level(chat_id, user_id):
     if is_owner(user_id):
         return 99
@@ -1215,7 +1218,6 @@ def can_punish(chat_id, punisher_id, target_id):
     target_level = get_user_level(chat_id, target_id)
     return punisher_level > target_level
 
-# ---------- Модерация (с явной обработкой прав) ----------
 def mute_user(chat_id, user_id, duration, issuer_id, reason=""):
     end_time = time.time() + duration
     if chat_id not in muted_users:
@@ -1260,7 +1262,6 @@ def unmute_user(chat_id, user_id, requester_id):
     return False, "no_rights"
 
 def force_remove_mute(chat_id, user_id):
-    """Снимает мут без проверки прав — используется самим ботом при истечении срока."""
     if chat_id in muted_users and user_id in muted_users[chat_id]:
         del muted_users[chat_id][user_id]
         if not muted_users[chat_id]:
@@ -1280,56 +1281,14 @@ def kick_user(chat_id, user_id):
         return False, f"ошибка: {e}"
 
 def ban_user(chat_id, user_id, from_id, reason=""):
-    """
-    Надёжный бан пользователя в беседе VK.
-
-    VK-бан здесь реализован через удаление пользователя из беседы
-    (messages.removeChatUser) + сохранение ID в banned_users.
-    При повторном приглашении handle_invite автоматически удалит его.
-    """
     if not user_id or user_id <= 0:
         return False, "некорректный ID пользователя"
-
     if user_id == BOT_ID:
         return False, "нельзя забанить самого бота"
 
-    # Без прав администратора бот не сможет удалить нарушителя
-    # ни сейчас, ни при повторном приглашении.
-    if not is_bot_admin(chat_id):
-        return False, "бот не является администратором этой беседы"
-
-    # Пытаемся удалить пользователя из беседы.
-    # Если его уже нет в беседе, внутренний бан всё равно сохраняем.
-    try:
-        vk.messages.removeChatUser(
-            chat_id=chat_id,
-            user_id=user_id
-        )
-    except vk_api.exceptions.ApiError as e:
-        code = getattr(e, "code", 0)
-
-        if code in (15, 925):
-            return False, "у бота нет прав администратора для удаления пользователя"
-
-        error_text = str(e).lower()
-        already_absent = (
-            "not found" in error_text
-            or "не найден" in error_text
-            or "not a member" in error_text
-            or "не является участником" in error_text
-            or "already removed" in error_text
-        )
-
-        if not already_absent:
-            return False, f"ошибка VK при удалении: {e}"
-
-    except Exception as e:
-        return False, f"ошибка при удалении пользователя: {e}"
-
-    # Сохраняем внутренний бан.
+    # Сохраняем бан всегда
     if chat_id not in banned_users:
         banned_users[chat_id] = {}
-
     role = get_user_role(chat_id, from_id) or "Администратор"
     banned_users[chat_id][user_id] = {
         "reason": reason or "не указана",
@@ -1337,9 +1296,33 @@ def ban_user(chat_id, user_id, from_id, reason=""):
         "from_role": role,
         "time": time.time()
     }
-
     save_bans()
-    return True, None
+
+    removal_error = None
+    if not is_bot_admin(chat_id):
+        removal_error = "бот не является администратором этой беседы"
+    else:
+        try:
+            vk.messages.removeChatUser(chat_id=chat_id, user_id=user_id)
+        except vk_api.exceptions.ApiError as e:
+            code = getattr(e, "code", 0)
+            if code in (15, 925):
+                removal_error = "у бота нет прав администратора для удаления пользователя"
+            else:
+                error_text = str(e).lower()
+                already_absent = (
+                    "not found" in error_text
+                    or "не найден" in error_text
+                    or "not a member" in error_text
+                    or "не является участником" in error_text
+                    or "already removed" in error_text
+                )
+                if not already_absent:
+                    removal_error = f"ошибка VK при удалении: {e}"
+        except Exception as e:
+            removal_error = f"ошибка при удалении пользователя: {e}"
+
+    return True, removal_error
 
 def unban_user(chat_id, user_id):
     if chat_id in banned_users and user_id in banned_users[chat_id]:
@@ -1350,7 +1333,6 @@ def unban_user(chat_id, user_id):
         return True
     return False
 
-# ---------- Варны ----------
 def add_warn(chat_id, user_id, issuer_id, reason=""):
     if chat_id not in warns:
         warns[chat_id] = {}
@@ -1382,7 +1364,6 @@ def get_warns(chat_id, user_id):
 def get_all_warned_users(chat_id):
     return list(warns.get(chat_id, {}).keys())
 
-# ---------- Ники ----------
 def set_nick(chat_id, user_id, nick):
     if chat_id not in nicknames:
         nicknames[chat_id] = {}
@@ -1426,7 +1407,6 @@ def get_user_by_nick(chat_id, nick):
             return uid
     return None
 
-# ---------- Фильтр ----------
 def check_filter(chat_id, text):
     words = filter_words.get(chat_id, [])
     if not words:
@@ -1437,7 +1417,6 @@ def check_filter(chat_id, text):
             return True
     return False
 
-# ---------- Антиспам ----------
 antiflood_counters = {}
 
 def check_antiflood(chat_id, user_id):
@@ -1457,7 +1436,6 @@ def check_antiflood(chat_id, user_id):
     antiflood_counters[chat_id][user_id] = timestamps
     return len(timestamps) > limit
 
-# ---------- Антитаг ----------
 def check_antitag(chat_id, text):
     banned = antitag_users.get(chat_id, [])
     if not banned:
@@ -1468,14 +1446,12 @@ def check_antitag(chat_id, text):
             return True
     return False
 
-# ---------- Приветствие ----------
 def send_welcome(chat_id, user_id):
     text = welcome_texts.get(chat_id)
     if text:
         text = text.replace("{user}", user_mention(user_id))
         send_message(chat_id, text)
 
-# ---------- Кастомные роли ----------
 def get_role_display(chat_id, role):
     if chat_id in custom_roles and role in custom_roles[chat_id]:
         return custom_roles[chat_id][role]
@@ -1489,7 +1465,17 @@ def get_help_text_and_keyboard(chat_id, from_id):
     lines = ["Команды пользователей:",
              "/info — официальные ресурсы проекта",
              "/getid — узнать оригинальный ID пользователя в ВК",
-             "/stats — информация о пользователе"]
+             "/stats — информация о пользователе",
+             "",
+             "Игровые команды:",
+             "/balance (/баланс) — посмотреть баланс",
+             "/casino (/казино) <ставка> — игра в казино",
+             "/bonus (/приз) — получить ежедневный бонус",
+             "/promo (/промо) <код> — активировать промокод",
+             "/buyvip — купить VIP статус",
+             "/transfer (/передать) @user <сумма> — перевести деньги",
+             "/top (/топ) — топ богатых пользователей",
+             "/duel (/дуэль) @user <сумма> — вызвать на дуэль"]
     
     if role_level >= 1:
         lines += ["",
@@ -1593,6 +1579,7 @@ def get_help_text_and_keyboard(chat_id, from_id):
         lines += ["",
                   "Команды владельца:",
                   "/addlogs @user — выдать доступ к логам",
+                  "/addtest @user — выдать роль тестера (все команды)",
                   "/restart — перезапустить бота через 30 секунд",
                   "/chatid — список бесед с логами",
                   "/chatlog [chat_id] — просмотр лога сообщений",
@@ -1611,7 +1598,6 @@ def get_help_text_and_keyboard(chat_id, from_id):
         keyboard = json.dumps({"inline": True, "buttons": buttons})
     return "\n".join(lines), keyboard
 
-# ================= ОБРАБОТКА СООБЩЕНИЙ =================
 def handle_message(event):
     global custom_info_text
 
@@ -1666,7 +1652,6 @@ def handle_message(event):
             )
         return
 
-    # Проверка мута
     if chat_id in muted_users and from_id in muted_users[chat_id]:
         if time.time() < muted_users[chat_id][from_id]["end"]:
             if cmid:
@@ -1678,7 +1663,6 @@ def handle_message(event):
         else:
             force_remove_mute(chat_id, from_id)
 
-    # Тишина
     if chat_id in quiet_chats and not has_senior_moderator_rights(chat_id, from_id):
         if cmid:
             delete_message(peer_id, cmid)
@@ -1686,14 +1670,12 @@ def handle_message(event):
 
     is_moderator_here = has_moderation_rights(chat_id, from_id)
 
-    # Фильтр (не применяется к модерации беседы)
     if not is_moderator_here and check_filter(chat_id, text):
         if cmid:
             delete_message(peer_id, cmid)
             send_message(chat_id, f"{user_mention(from_id)}, ваше сообщение содержит запрещённое слово.")
         return
 
-    # Антиспам (не применяется к модерации беседы)
     if not is_moderator_here and check_antiflood(chat_id, from_id):
         if cmid:
             delete_message(peer_id, cmid)
@@ -1701,14 +1683,12 @@ def handle_message(event):
             send_message(chat_id, f"{user_mention(from_id)} замьючен за спам на 5 минут.")
         return
 
-    # Антитаг (не применяется к модерации беседы)
     if not is_moderator_here and check_antitag(chat_id, text):
         if cmid:
             delete_message(peer_id, cmid)
             send_message(chat_id, f"{user_mention(from_id)}, запрещено упоминать этого пользователя.")
         return
 
-    # Статистика и логирование
     if chat_id != LOG_CHAT_ID:
         if chat_id not in msg_stats:
             msg_stats[chat_id] = {}
@@ -1749,7 +1729,7 @@ def handle_message(event):
             form_chats.add(chat_id)
             save_form_chats()
             send_message(chat_id, "Режим формы включен. Все сообщения, кроме /form и /formu, будут игнорироваться.")
-        else:  # off
+        else:
             form_chats.discard(chat_id)
             save_form_chats()
             send_message(chat_id, "Режим формы выключен.")
@@ -1853,7 +1833,6 @@ def handle_message(event):
             return
         else:
             return
-    # ========== КОНЕЦ БЛОКА ФОРМЫ ==========
 
     parts = text.split(maxsplit=4)
     command = parts[0].lower()
@@ -1866,7 +1845,7 @@ def handle_message(event):
 
     if command == '/restart':
         global restart_scheduled
-        if from_id not in OWNER_IDS:
+        if not is_owner(from_id):
             send_message(chat_id, "Команда доступна только владельцу бота.")
             return
         if restart_scheduled:
@@ -1884,7 +1863,6 @@ def handle_message(event):
         threading.Timer(30, restart_bot).start()
         return
 
-    # Команда /formu – вывод готовой команды (без выполнения)
     if command == '/formu':
         if chat_id not in form_chats:
             send_message(chat_id, "Команда /formu доступна только при включённом режиме форм (/form on).")
@@ -1911,7 +1889,6 @@ def handle_message(event):
         send_message(chat_id, cmd_text)
         return
 
-    # -------- Остальные команды --------
     if command in ('/help', '/хелп'):
         help_text, help_keyboard = get_help_text_and_keyboard(chat_id, from_id)
         send_message(chat_id, help_text, keyboard=help_keyboard)
@@ -2061,6 +2038,21 @@ def handle_message(event):
         send_message(chat_id, f"{get_user_link(target_id)} получил(а) доступ к логам.")
         return
 
+    if command == '/addtest':
+        if not is_owner(from_id):
+            send_message(chat_id, "Команда доступна только владельцу бота.")
+            return
+        if not target_id:
+            send_message(chat_id, "Укажите пользователя: /addtest @user или ответьте на сообщение.")
+            return
+        if target_id in TESTER_IDS:
+            send_message(chat_id, "Пользователь уже является тестером.")
+            return
+        TESTER_IDS.add(target_id)
+        save_testers()
+        send_message(chat_id, f"{get_user_link(target_id)} назначен(а) тестером. Ему доступны все команды бота.")
+        return
+
     if command == '/chatid':
         if not can_view_logs(from_id):
             send_message(chat_id, "У вас нет доступа к логам.")
@@ -2071,8 +2063,8 @@ def handle_message(event):
         return
 
     if command == '/globalspec':
-        if from_id != OWNER_ID:
-            send_message(chat_id, "Команда доступна только основному владельцу бота.")
+        if not is_owner(from_id):
+            send_message(chat_id, "Команда доступна только владельцу бота.")
             return
         if not target_id:
             send_message(chat_id, "Укажите пользователя: /globalspec @user или ответьте на сообщение.")
@@ -2463,7 +2455,6 @@ def handle_message(event):
         send_message(chat_id, "\n".join(lines))
         return
 
-    # ---------- Команды старших модераторов ----------
     if command in ('/addmoder', '/mod', '/модер', '/модератор'):
         if not has_senior_moderator_rights(chat_id, from_id):
             send_message(chat_id, "Эта команда доступна только старшим модераторам.")
@@ -2492,6 +2483,8 @@ def handle_message(event):
         success, error = ban_user(chat_id, target_id, from_id, reason)
         if success:
             ban_text = f"{get_user_link(from_id)} заблокировал-(а) {get_user_link(target_id)}\nПричина: {reason}"
+            if error:
+                ban_text += f"\n⚠️ {error}"
             keyboard = {
                 "inline": True,
                 "buttons": [[{
@@ -2625,7 +2618,6 @@ def handle_message(event):
             send_message(chat_id, "Не удалось выполнить упоминание.")
         return
 
-    # ---------- Команды администраторов ----------
     if command == '/addsenmoder':
         if not has_admin_rights(chat_id, from_id):
             send_message(chat_id, "Эта команда доступна только администраторам.")
@@ -2661,7 +2653,6 @@ def handle_message(event):
             send_message(chat_id, "Используйте: /quiet on или /quiet off")
         return
 
-    # ---------- Серверные команды (улучшенная логика) ----------
     if command == '/sban':
         if not has_admin_rights(chat_id, from_id):
             send_message(chat_id, "Недостаточно прав.")
@@ -2671,14 +2662,12 @@ def handle_message(event):
         server_id = None
         reason = "не указана"
 
-        # Определяем цель
         if msg.get('fwd_messages'):
             target_id = msg['fwd_messages'][0]['from_id']
         elif msg.get('reply_message'):
             target_id = msg['reply_message']['from_id']
 
         if target_id:
-            # Цель уже известна, ищем сервер в оставшихся аргументах
             if len(parts) > 1 and parts[1].isdigit():
                 sid = int(parts[1])
                 if sid in server_chats:
@@ -2688,14 +2677,12 @@ def handle_message(event):
                     send_message(chat_id, f"Сервер с ID {sid} не существует.")
                     return
             else:
-                # Без указания сервера – используем сервер текущего чата
                 server_id = get_current_server_id(chat_id)
                 if server_id is None:
                     send_message(chat_id, "Эта беседа не привязана к серверу. Укажите ID сервера: /sban <server_id> @user")
                     return
                 reason = ' '.join(parts[1:]) if len(parts) > 1 else "не указана"
         else:
-            # Цели нет, парсим аргументы
             if len(parts) < 2:
                 send_message(chat_id, "Использование: /sban [server_id] @user [причина]")
                 return
@@ -2710,7 +2697,6 @@ def handle_message(event):
                     return
                 reason = ' '.join(parts[3:]) if len(parts) > 3 else "не указана"
             else:
-                # Первый аргумент – цель, сервер – текущий
                 target_id = extract_user_from_arg(parts[1])
                 if not target_id:
                     send_message(chat_id, "Не удалось определить пользователя.")
@@ -2727,16 +2713,16 @@ def handle_message(event):
 
         chats_to_ban = server_chats[server_id] if server_id else get_all_server_chats()
         success = 0
-        no_admin = []
+        partial = []
         failed = []
         total = len(chats_to_ban)
         for cid in chats_to_ban:
-            if not is_bot_admin(cid):
-                no_admin.append(cid)
-                continue
             res, error = ban_user(cid, target_id, from_id, reason)
             if res:
-                success += 1
+                if error is None:
+                    success += 1
+                else:
+                    partial.append((cid, error))
                 ban_msg = f"{get_user_link(from_id)} заблокировал-(а) в беседах сервера <<{server_id}>> {get_user_link(target_id)}\nПричина: {reason}"
                 if cid != chat_id:
                     send_message(cid, ban_msg)
@@ -2745,9 +2731,9 @@ def handle_message(event):
 
         report = [f"{get_user_link(from_id)} заблокировал-(а) в {success}/{total} беседах сервера <<{server_id}>> {get_user_link(target_id)}",
                   f"Причина: {reason}"]
-        if no_admin:
-            names = ", ".join(get_chat_name(c) for c in no_admin)
-            report.append(f"Нет прав администратора бота в: {names}")
+        if partial:
+            names = ", ".join(f"{get_chat_name(c)} ({err})" for c, err in partial)
+            report.append(f"Забанены, но не удалены: {names}")
         if failed:
             fail_text = "; ".join(f"{get_chat_name(c)} — {err}" for c, err in failed)
             report.append(f"Другие ошибки: {fail_text}")
@@ -3040,7 +3026,6 @@ def handle_message(event):
             send_message(chat_id, f"{get_user_link(from_id)} назначил {get_user_link(target_id)} Модератором во всех беседах сервера.")
         return
 
-    # ---------- Команды старшего администратора ----------
     role_level = get_role_level(get_user_role(chat_id, from_id) or "")
     if is_owner(from_id):
         role_level = 99
@@ -3102,7 +3087,6 @@ def handle_message(event):
                 send_message(chat_id, "Используйте: /filter add <слово> или /filter remove <слово>")
             return
 
-    # ---------- Команды зам. спец администратора ----------
     if role_level >= 5:
         if command == '/addsenadmin':
             if not target_id:
@@ -3244,7 +3228,6 @@ def handle_message(event):
                 send_message(chat_id, "Пользователь не находится в глобальном бане.")
             return
 
-    # ---------- Команды спец. администратора ----------
     if role_level >= 6:
         if command == '/addzsa':
             if not target_id:
@@ -3258,7 +3241,7 @@ def handle_message(event):
             return
 
         elif command == '/addspec':
-            if from_id != OWNER_ID:
+            if not is_owner(from_id):
                 send_message(chat_id, "Только владелец бота может выдавать роль «Спец администратор».", random_id=command_random_id)
                 return
             if not target_id:
@@ -3628,7 +3611,6 @@ def handle_message(event):
                 send_message(chat_id, "Использование: /form on или /form off")
             return
 
-    # ========== ЭКОНОМИЧЕСКИЕ КОМАНДЫ (доступны всем) ==========
     if command == '/givecash':
         if not is_owner(from_id):
             send_message(chat_id, "Команда доступна только владельцу бота.")
@@ -3791,15 +3773,13 @@ def handle_message(event):
             send_message(chat_id, "Недостаточно средств.")
             return
 
-        # Симуляция казино: три случайных предмета
         items = ["🍒", "🍋", "🍉", "🍇", "🍊", "🍓", "🍏", "⭐"]
         roll = [random.choice(items) for _ in range(3)]
         unique_count = len(set(roll))
 
-        # Расчёт выигрыша
         win = 0
         if unique_count == 1:
-            win = amount * 3  # джекпот
+            win = amount * 3
             result_text = f"🎉 ДЖЕКПОТ! Выпало три одинаковых предмета!\n💰 Выигрыш: {win:,}$"
         elif unique_count == 2:
             win = amount * 2
@@ -3808,7 +3788,6 @@ def handle_message(event):
             win = 0
             result_text = "😥 К сожалению, все предметы разные"
 
-        # Обновляем баланс и статистику
         user_data["balance"] -= amount
         if win > 0:
             user_data["balance"] += win
@@ -3852,7 +3831,6 @@ def handle_message(event):
             balances[from_id] = user_data
 
         now = time.time()
-        # Ежедневный бонус (раз в 24 часа)
         if now - user_data["daily_last"] < 86400:
             remaining = int(86400 - (now - user_data["daily_last"]))
             hours = remaining // 3600
@@ -3860,7 +3838,6 @@ def handle_message(event):
             send_message(chat_id, f"Вы уже получали приз. Подождите {hours}ч {minutes}м.")
             return
 
-        # Размер приза: VIP -> 5k-10k, обычный -> 2k-5k
         if is_vip(from_id):
             prize = random.randint(5000, 10000)
         else:
@@ -3917,7 +3894,6 @@ def handle_message(event):
             send_message(chat_id, "Недостаточно средств. VIP стоит 20 000$.")
             return
 
-        # Списываем 20k, даём VIP на 1 месяц (30 дней)
         user_data["balance"] -= 20000
         user_data["vip"] = True
         user_data["vip_until"] = time.time() + 30 * 86400
@@ -3926,11 +3902,9 @@ def handle_message(event):
         return
 
     if command == '/transfer' or command == '/передать':
-        # Формат: /передать @user сумма
         if len(parts) < 3:
             send_message(chat_id, "Использование: /передать @user <сумма>")
             return
-        # Определяем получателя
         recipient = extract_user_from_arg(parts[1])
         if not recipient:
             send_message(chat_id, "Не удалось определить получателя.")
@@ -3944,7 +3918,6 @@ def handle_message(event):
             send_message(chat_id, "Сумма должна быть числом.")
             return
 
-        # Проверяем, что отправитель не равен получателю
         if recipient == from_id:
             send_message(chat_id, "Нельзя переводить самому себе.")
             return
@@ -3991,7 +3964,6 @@ def handle_message(event):
             }
             balances[recipient] = recipient_data
 
-        # Переводим
         sender_data["balance"] -= amount
         sender_data["transferred_sent"] += amount
         recipient_data["balance"] += amount
@@ -4002,14 +3974,12 @@ def handle_message(event):
         return
 
     if command == '/top' or command == '/топ':
-        # Собираем всех пользователей с балансом > 0
         top_list = []
         for uid, data in balances.items():
             if data["balance"] > 0:
                 top_list.append((uid, data["balance"], data.get("vip", False)))
-        # Сортируем по убыванию баланса
         top_list.sort(key=lambda x: x[1], reverse=True)
-        top_list = top_list[:10]  # топ 10
+        top_list = top_list[:10]
 
         if not top_list:
             send_message(chat_id, "Топ пуст.")
@@ -4028,7 +3998,6 @@ def handle_message(event):
         return
 
     if command == '/duel' or command == '/дуэль':
-        # Формат: /дуэль @user сумма
         if len(parts) < 3:
             send_message(chat_id, "Использование: /дуэль @user <сумма>")
             return
@@ -4048,7 +4017,6 @@ def handle_message(event):
             send_message(chat_id, "Сумма должна быть числом.")
             return
 
-        # Проверяем баланс обоих
         challenger_data = balances.get(from_id)
         if not challenger_data or challenger_data["balance"] < amount:
             send_message(chat_id, "У вас недостаточно средств.")
@@ -4059,7 +4027,6 @@ def handle_message(event):
             send_message(chat_id, f"У {get_user_link(opponent)} недостаточно средств.")
             return
 
-        # Отправляем сообщение с кнопками
         duel_text = f"⚔️ {get_user_link(from_id)} предложил сразиться в дуэли на {amount:,}$"
         keyboard = get_duel_keyboard(from_id, opponent, amount, chat_id)
         try:
@@ -4069,7 +4036,6 @@ def handle_message(event):
                 random_id=get_random_id(),
                 keyboard=keyboard
             )
-            # Сохраняем информацию о дуэли
             message_id = result['conversation_message_id']
             if chat_id not in active_duels:
                 active_duels[chat_id] = {}
@@ -4082,9 +4048,6 @@ def handle_message(event):
             send_message(chat_id, f"Ошибка отправки дуэли: {e}")
         return
 
-    # ===== Остальные команды (модерация и т.д.) уже обработаны выше =====
-
-# ---------- Авто-кик забаненных ----------
 def handle_invite(event):
     msg = event.message
     action = msg.get('action')
@@ -4093,13 +4056,11 @@ def handle_invite(event):
     chat_id = msg['peer_id'] - 2000000000
     invited = action.get('member_id')
 
-    # Сброс счётчика сообщений при входе
     if chat_id not in msg_stats:
         msg_stats[chat_id] = {}
     msg_stats[chat_id][invited] = {"count": 0, "last_time": 0}
     save_msg_stats()
 
-    # Проверка глобального бана
     if invited in global_bans:
         try:
             vk.messages.removeChatUser(chat_id=chat_id, user_id=invited)
@@ -4108,8 +4069,6 @@ def handle_invite(event):
             pass
         return
 
-    # Проверка локального бана.
-    # Забаненного пользователя сразу удаляем из беседы при повторном входе.
     if chat_id in banned_users and invited in banned_users[chat_id]:
         try:
             if is_bot_admin(chat_id):
@@ -4119,7 +4078,6 @@ def handle_invite(event):
         send_message(chat_id, f"{get_user_link(invited)} находится в бане этой беседы.")
         return
 
-    # Режим приглашений только для модераторов
     if chat_id in invite_settings and invite_settings[chat_id].get("only_mods"):
         inviter = msg['from_id']
         if not has_moderation_rights(chat_id, inviter):
@@ -4132,7 +4090,6 @@ def handle_invite(event):
 
     send_welcome(chat_id, invited)
 
-# ================= CALLBACK =================
 def process_callback(event):
     obj = event.object
     user_id = obj['user_id']
@@ -4378,13 +4335,11 @@ def process_callback(event):
         else:
             return
 
-        # Удаляем исходное сообщение с кнопками
         try:
             if conversation_message_id:
                 vk.messages.delete(peer_id=peer_id, cmids=[conversation_message_id], delete_for_all=True)
         except:
             pass
-        # Отправляем новое сообщение с вердиктом
         send_message(chat_id, new_text)
 
     elif cmd == 'unban_btn':
@@ -4407,13 +4362,11 @@ def process_callback(event):
         else:
             pass
 
-    # ========== Обработка дуэли ==========
     elif cmd == 'duel_accept':
         challenger = payload.get('challenger')
         opponent = payload.get('opponent')
         amount = payload.get('amount')
         chat_id_payload = payload.get('chat_id')
-        # Проверяем, что нажал именно оппонент
         if user_id != opponent:
             try:
                 vk.messages.sendMessageEventAnswer(
@@ -4426,7 +4379,6 @@ def process_callback(event):
                 pass
             return
 
-        # Проверяем наличие дуэли и её актуальность
         if chat_id not in active_duels or conversation_message_id not in active_duels[chat_id]:
             try:
                 vk.messages.edit(
@@ -4441,7 +4393,6 @@ def process_callback(event):
 
         duel = active_duels[chat_id][conversation_message_id]
         if duel["challenger"] != challenger or duel["opponent"] != opponent or duel["amount"] != amount:
-            # что-то не совпадает
             try:
                 vk.messages.edit(
                     peer_id=peer_id,
@@ -4453,7 +4404,6 @@ def process_callback(event):
                 pass
             return
 
-        # Проверяем балансы
         challenger_data = balances.get(challenger)
         opponent_data = balances.get(opponent)
         if not challenger_data or challenger_data["balance"] < amount:
@@ -4483,16 +4433,13 @@ def process_callback(event):
             del active_duels[chat_id][conversation_message_id]
             return
 
-        # Проводим дуэль: случайный победитель
         winner = random.choice([challenger, opponent])
         loser = opponent if winner == challenger else challenger
 
-        # Переводим деньги: победитель получает ставку, проигравший теряет
         challenger_data["balance"] -= amount
         opponent_data["balance"] -= amount
         winner_data = balances[winner]
-        winner_data["balance"] += amount * 2  # победитель получает сумму ставки + ставку проигравшего? В описании: "победитель забирает ставку" – если оба поставили по amount, то победитель получает 2*amount, а проигравший теряет amount. Так и сделаем.
-        # Обновляем статистику
+        winner_data["balance"] += amount * 2
         winner_data["duel_wins"] += 1
         winner_data["total_won"] += amount * 2
         loser_data = balances[loser]
@@ -4500,7 +4447,6 @@ def process_callback(event):
         loser_data["total_lost"] += amount
         save_balances()
 
-        # Удаляем сообщение дуэли и отправляем результат
         try:
             vk.messages.delete(peer_id=peer_id, cmids=[conversation_message_id], delete_for_all=True)
         except:
@@ -4515,7 +4461,6 @@ def process_callback(event):
         opponent = payload.get('opponent')
         amount = payload.get('amount')
         chat_id_payload = payload.get('chat_id')
-        # Проверяем, что нажал оппонент или вызывающий (можно отклонить и самому, но по логике только оппонент)
         if user_id != opponent and user_id != challenger:
             try:
                 vk.messages.sendMessageEventAnswer(
@@ -4528,7 +4473,6 @@ def process_callback(event):
                 pass
             return
 
-        # Удаляем сообщение и очищаем дуэль
         try:
             vk.messages.delete(peer_id=peer_id, cmids=[conversation_message_id], delete_for_all=True)
         except:
@@ -4537,7 +4481,6 @@ def process_callback(event):
             del active_duels[chat_id][conversation_message_id]
         send_message(chat_id, f"❌ {get_user_link(opponent)} отклонил дуэль с {get_user_link(challenger)}.")
 
-# ---------- Главный цикл ----------
 def main():
     print("Bot started!")
     while True:
@@ -4552,8 +4495,6 @@ def main():
                     elif event.type == VkBotEventType.MESSAGE_EVENT:
                         process_callback(event)
                 except Exception as inner_e:
-                    # Ошибка в обработке ОДНОГО события не должна ронять весь longpoll-цикл
-                    # и не должна "съедать" остальные события из текущей пачки.
                     print(f"Ошибка обработки события: {inner_e}")
         except Exception as e:
             print(f"Error: {e}")
